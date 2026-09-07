@@ -1,0 +1,18 @@
+{
+  "name": "FruitVSZombie WeChat Mini-game",
+  "install": "npm install",
+  "terminals": [
+    {
+      "name": "preview-server",
+      "command": "npx http-server . -p 8080 -c-1 -s",
+      "description": "Static server for the browser dev harness. Open http://localhost:8080/dev/ to play the game (WeChat `wx` runtime is polyfilled by dev/wx-adapter.js)."
+    }
+  ],
+  "ports": [
+    {
+      "name": "Game preview",
+      "port": 8080
+    }
+  ],
+  "chromeExecutablePath": "/usr/local/bin/google-chrome"
+}
