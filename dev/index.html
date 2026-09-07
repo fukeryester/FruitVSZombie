@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>合成大西瓜 · 浏览器预览 (dev harness)</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #14101c;
+      font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #f4ead2;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    header {
+      text-align: center;
+      opacity: 0.9;
+    }
+    header h1 { font-size: 16px; margin: 0 0 2px; font-weight: 700; }
+    header p { font-size: 12px; margin: 0; opacity: 0.65; }
+    .device {
+      position: relative;
+      padding: 10px;
+      border-radius: 28px;
+      background: #221a30;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), inset 0 0 0 2px #3a2c4e;
+    }
+    #game-canvas {
+      display: block;
+      border-radius: 18px;
+      background: #000;
+      touch-action: none;
+    }
+    #error-banner {
+      display: none;
+      max-width: 520px;
+      white-space: pre-wrap;
+      font-size: 12px;
+      line-height: 1.4;
+      color: #ffb4bb;
+      background: rgba(255, 59, 74, 0.12);
+      border: 1px solid rgba(255, 59, 74, 0.4);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>合成大西瓜 · 水果大战僵尸/怪蛇</h1>
+    <p>Browser dev harness — WeChat <code>wx</code> runtime is polyfilled by <code>dev/wx-adapter.js</code></p>
+  </header>
+
+  <div class="device">
+    <canvas id="game-canvas"></canvas>
+  </div>
+
+  <div id="error-banner"></div>
+
+  <!-- 1) Polyfill the WeChat `wx` global (classic script, runs first). -->
+  <script src="/dev/wx-adapter.js"></script>
+
+  <!-- 2) Boot the unmodified game modules. game.js uses an extensionless import
+          that browsers reject, so we import js/main.js directly here. -->
+  <script type="module">
+    const banner = document.getElementById('error-banner');
+    function showError(msg) {
+      banner.style.display = 'block';
+      banner.textContent = String(msg);
+    }
+    window.addEventListener('error', (e) => showError(e.message + '\n' + (e.error && e.error.stack || '')));
+    window.addEventListener('unhandledrejection', (e) => showError('Unhandled promise rejection:\n' + (e.reason && e.reason.stack || e.reason)));
+
+    try {
+      const { default: Main } = await import('/js/main.js');
+      window.__game = new Main();
+      console.log('[dev-harness] game booted');
+    } catch (err) {
+      console.error(err);
+      showError(err && err.stack || err);
+    }
+  </script>
+</body>
+</html>
