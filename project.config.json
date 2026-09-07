@@ -66,6 +66,22 @@
       {
         "type": "folder",
         "value": "Assets/pic"
+      },
+      {
+        "type": "folder",
+        "value": "dev"
+      },
+      {
+        "type": "folder",
+        "value": "node_modules"
+      },
+      {
+        "type": "file",
+        "value": "package.json"
+      },
+      {
+        "type": "file",
+        "value": "package-lock.json"
       }
     ],
     "include": []
