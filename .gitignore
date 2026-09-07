@@ -1,0 +1,19 @@
+# 微信开发者工具本地配置
+project.private.config.json
+
+# 本地助手记忆，不属于源码
+.workbuddy/
+
+# 依赖与构建产物
+node_modules/
+miniprogram_npm/
+dist/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+*.swp
+*.swo
