@@ -3,7 +3,7 @@
  */
 import { levels } from '../config/balls.js';
 import { applyPixelCtx, palette, snap, fillPixelText } from './pixel.js';
-import { drawSprite, fruitSprite, zombieSprite, coreSprite } from './assets.js';
+import { drawSprite, fruitSprite, zombieSprite, coreSprite, fruitFill, zombieFill, CORE_BODY_FILL } from './assets.js';
 
 function drawPixelOrb(ctx, x, y, r, color, edge) {
   x = snap(x); y = snap(y); r = Math.max(2, snap(r));
@@ -23,13 +23,13 @@ function drawPixelOrb(ctx, x, y, r, color, edge) {
 }
 
 export function drawBall(ctx, x, y, r, level) {
-  if (drawSprite(ctx, fruitSprite(level), x, y, r)) return;
+  if (drawSprite(ctx, fruitSprite(level), x, y, r, fruitFill(level))) return;
   const cfg = levels[level] || levels[0];
   drawPixelOrb(ctx, x, y, r, cfg.color, palette.ink);
 }
 
 export function drawZombie(ctx, x, y, r, level) {
-  if (drawSprite(ctx, zombieSprite(level), x, y, r)) return;
+  if (drawSprite(ctx, zombieSprite(level), x, y, r, zombieFill(level))) return;
   drawPixelOrb(ctx, x, y, r, '#5d8a35', '#1e3210');
   if (r < 26) return;
   const eye = Math.max(4, snap(r * 0.22));
@@ -50,7 +50,7 @@ export function drawZombie(ctx, x, y, r, level) {
 }
 
 export function drawZombieCore(ctx, x, y, r) {
-  if (drawSprite(ctx, coreSprite(), x, y, r)) return;
+  if (drawSprite(ctx, coreSprite(), x, y, r, CORE_BODY_FILL)) return;
   drawPixelOrb(ctx, x, y, r, '#d92534', '#4a0810');
 }
 

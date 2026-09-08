@@ -15,8 +15,8 @@
  *   density      密度（影响碰撞动量交换，一般无需改）
  */
 export const physicsDefaults = {
-  restitution: 0.5, // 弹性系数：手感生命线，推荐 0.15~0.35
-  friction: 0.03,    // 摩擦系数
+  restitution: 0.55, // 弹性系数：手感生命线，推荐 0.15~0.35
+  friction: 0.02,    // 摩擦系数
   density: 0.01    // 密度
 };
 

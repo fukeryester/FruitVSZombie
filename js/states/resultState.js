@@ -6,9 +6,11 @@
  */
 import { BaseState } from '../core/stateMachine.js';
 import { Button, showToast } from '../ui/widgets.js';
-import { watchRewardAd } from '../core/adApi.js';
+import { watchRewardAd, AD_UNIT_ID } from '../core/adApi.js';
+import { makePayButton } from '../ui/payModal.js';
 import { getRank } from '../core/leaderboard.js';
 import { applyPixelCtx, fillPixelText, pixelPanel, palette } from '../ui/pixel.js';
+import { drawStageBg } from '../ui/hud.js';
 
 const AD_MIN_DWELL_MS = 5000;
 
@@ -32,28 +34,35 @@ export default class ResultState extends BaseState {
     this.isNewBest = playing.score >= g.bestScore && playing.score > 0;
 
     const btnW = Math.min(420, W - 100);
-    // 通关结算没有"复活"一说，只有失败才提供看广告复活
+    const y0 = H * 0.56;
+    // 通关结算没有"复活"一说，只有失败才提供看广告复活 / 氪金
     this.reviveBtn = this.win ? null : new Button({
       x: (W - btnW) / 2,
-      y: H * 0.56,
+      y: y0,
       w: btnW,
-      h: 96,
+      h: 88,
       text: '📺 看广告复活',
       bgColor: '#e8a20c',
       fontSize: 36,
       onTap: () => this._tryRevive()
     });
+    this.payBtn = this.win ? null : makePayButton(g, (W - btnW) / 2, y0 + 100, btnW, 72, 32);
     this.exitBtn = new Button({
       x: (W - btnW) / 2,
-      y: this.win ? H * 0.56 : H * 0.56 + 120,
+      y: this.win ? y0 : y0 + 188,
       w: btnW,
-      h: 96,
+      h: 88,
       text: this.win ? '🏠 回到大厅' : '退出回大厅',
       bgColor: '#8a6d9e',
       fontSize: 36,
       onTap: () => g.states.switchTo(g.createLobbyState())
     });
     this.busy = false;
+    g.audio.startBgm(this.win ? 'resultWin' : 'resultFail');
+  }
+
+  onExit() {
+    this.game.audio.stopBgm();
   }
 
   async _tryRevive() {
@@ -66,6 +75,8 @@ export default class ResultState extends BaseState {
       const g = this.game;
       g.states.pop(); // 弹出结算层，重新激活 PlayingState
       this.playing.revive();
+    } else if (res.reason === 'open_fail') {
+      showToast('无法打开页面，复活失败');
     } else {
       showToast('观看广告未满 5 秒，无法复活');
     }
@@ -77,7 +88,8 @@ export default class ResultState extends BaseState {
     const H = g.screenH;
 
     applyPixelCtx(ctx);
-    ctx.fillStyle = 'rgba(12,6,22,0.86)';
+    drawStageBg(ctx, W, H, null, this.win ? 'resultWin' : 'resultFail');
+    ctx.fillStyle = 'rgba(8,4,16,0.32)';
     ctx.fillRect(0, 0, W, H);
 
     ctx.textAlign = 'center';
@@ -110,21 +122,31 @@ export default class ResultState extends BaseState {
     });
 
     if (this.reviveBtn) this.reviveBtn.render(ctx);
+    if (this.payBtn) this.payBtn.render(ctx);
     this.exitBtn.render(ctx);
 
     if (!this.win) {
       ctx.fillStyle = 'rgba(255,247,232,0.45)';
-      fillPixelText(ctx, '看广告逗留满 5 秒可复活并保留分数', W / 2, H * 0.56 + 250, 20);
+      fillPixelText(
+        ctx,
+        AD_UNIT_ID ? '看广告逗留满 5 秒可复活并保留分数' : '打开页面即可复活并保留分数',
+        W / 2, this.exitBtn.y + 110, 20
+      );
     }
+    g.payModal.render(ctx);
   }
 
   onTouchStart(t) {
+    if (this.game.payModal.handleTouch('start', t)) return;
     if (this.reviveBtn) this.reviveBtn.handleTouch('start', t);
+    if (this.payBtn) this.payBtn.handleTouch('start', t);
     this.exitBtn.handleTouch('start', t);
   }
 
   onTouchEnd(t) {
+    if (this.game.payModal.handleTouch('end', t)) return;
     if (this.reviveBtn) this.reviveBtn.handleTouch('end', t);
+    if (this.payBtn) this.payBtn.handleTouch('end', t);
     this.exitBtn.handleTouch('end', t);
   }
 }

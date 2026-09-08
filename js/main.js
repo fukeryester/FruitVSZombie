@@ -9,10 +9,10 @@ import { preloadSprites } from './ui/assets.js';
 import LobbyState from './states/lobbyState.js';
 import FruitMergeState from './states/fruitMergeState.js';
 import FruitVsZombieState from './states/fruitVsZombieState.js';
-import FruitVsSnakeState from './states/fruitVsSnakeState.js';
 import ResultState from './states/resultState.js';
 import { STAGE_IDS } from './config/stages.js';
 import { playerLevelStart, resetPlayerLevel } from './config/level.js';
+import { PayModal } from './ui/payModal.js';
 
 /**
  * 设计分辨率宽度
@@ -53,6 +53,7 @@ export default class Main {
     this.ctx.setTransform(dpr * this.uiScale, 0, 0, dpr * this.uiScale, 0, 0);
     applyPixelCtx(this.ctx);
     preloadSprites();
+    this.payModal = new PayModal(this);
 
     // 全局
     this.audio = new AudioMgr();
@@ -75,12 +76,8 @@ export default class Main {
     // 新增阶段：STAGE_IDS 追加 id + 此处补一个工厂即可，
     // 晋级 / 调试跳段 / 最终关进结算全部自动生效。
     const stageFactories = {
-      // 第一阶段：水果合成（原 PlayingState，重命名以区分两个局内阶段）
       fruitMerge: () => new FruitMergeState(this),
-      // 第二阶段：水果大战僵尸（携带前一阶段分数进入）
-      fruitVsZombie: (carryScore) => new FruitVsZombieState(this, carryScore),
-      // 第三阶段：水果大战怪蛇（500 节蜿蜒蛇 + 双向链表 + 卡牌节点）
-      fruitVsSnake: (carryScore) => new FruitVsSnakeState(this, carryScore)
+      fruitVsZombie: (carryScore) => new FruitVsZombieState(this, carryScore)
     };
     this.stageFlow = STAGE_IDS.map((id) => ({ id, create: stageFactories[id] }));
     this.createPlayingState = () => this.createStageState('fruitMerge'); // 大厅等处的旧别名

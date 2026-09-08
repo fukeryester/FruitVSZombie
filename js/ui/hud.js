@@ -5,36 +5,16 @@ import { levels } from '../config/balls.js';
 import { drawBall } from './ballRenderer.js';
 import {
   applyPixelCtx, fillPixelText, pxFont, pixelPanel, pixelBar,
-  fillDitherBg, pixelDashLine, PIXEL, palette, snap
+  pixelDashLine, palette, snap
 } from './pixel.js';
 
-export const THEME = {
-  lobby: {
-    bg1: '#1a1030', dither: '#2a1848', floor: '#24143c', floorHi: '#3d2466',
-    text: '#fff7e8', muted: 'rgba(255,247,232,0.75)'
-  },
-  merge: {
-    bg1: '#e8b4c4', dither: '#f4d0dc', floor: '#7a5344', floorHi: '#a07460',
-    text: '#2a1810', muted: 'rgba(42,24,16,0.7)'
-  },
-  zombie: {
-    bg1: '#9cc46c', dither: '#b8d888', floor: '#5c4a34', floorHi: '#7a6448',
-    text: '#1a2410', muted: 'rgba(26,36,16,0.7)'
-  },
-  snake: {
-    bg1: '#160c20', dither: '#281438', floor: '#100818', floorHi: '#3a1850',
-    text: '#f3e7ff', muted: 'rgba(243,231,255,0.75)'
-  }
-};
+export { drawStageBg } from './stageBg.js';
 
-export function drawStageBg(ctx, W, H, floorY, theme) {
-  applyPixelCtx(ctx);
-  fillDitherBg(ctx, W, H, theme.bg1, theme.dither, 8);
-  ctx.fillStyle = theme.floor;
-  ctx.fillRect(0, snap(floorY), W, H - floorY);
-  ctx.fillStyle = theme.floorHi;
-  ctx.fillRect(0, snap(floorY), W, PIXEL);
-}
+export const THEME = {
+  lobby: { text: '#fff7e8', muted: 'rgba(255,247,232,0.75)' },
+  merge: { text: '#2a1810', muted: 'rgba(42,24,16,0.7)' },
+  zombie: { text: '#e8f0d8', muted: 'rgba(232,240,216,0.75)' }
+};
 
 export function drawWarnLine(ctx, W, y, flash) {
   pixelDashLine(ctx, 0, y, W, y, flash ? palette.danger : '#c43c28', 4, 12, 8);

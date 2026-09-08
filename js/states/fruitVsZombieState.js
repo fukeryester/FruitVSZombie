@@ -8,7 +8,7 @@
  *         僵尸越过警戒线扣玩家血量，血量归零失败。
  *       · 左半区：被墙体划分成 3x3 神器格。平行于警戒线的 12 段横墙
  *         （墙1~墙12）带血量（自上而下 4 行递增），网格下方的墙13（整宽）
- *         与最底部的尸核舱之间关着尸核（血红色静态球，5000 血，不上浮）。
+ *         与最底部的尸核舱之间关着尸核（血红色静态球，coreMaxHp 血，不上浮）。
  *   - 玩家从上方投放水果：水果伤害 = 半径 × fruitWallDamageMul（越大越痛）。
  *       · 水果砸水平血墙 → 墙掉血 + 水果被摧毁；墙血量归零即消失；
  *       · 水果撞**竖直墙**（竖隔板/中隔墙）→ **没有任何水果走自毁**：
@@ -32,13 +32,15 @@
 import { BaseState } from '../core/stateMachine.js';
 import { PhysicsWorld, Body } from '../core/physics.js';
 import { Button, SettingsModal, showToast, clearToasts } from '../ui/widgets.js';
+import { makePayButton } from '../ui/payModal.js';
+import { watchRewardAd } from '../core/adApi.js';
 import { CardSystem } from '../cards/index.js';
 import { levels, physicsDefaults } from '../config/balls.js';
 import { zombieCardPool } from '../config/cards.js';
 import { getCardTriggerCount } from '../config/level.js';
 import { drawBall, drawZombie, drawZombieCore, drawArtifact } from '../ui/ballRenderer.js';
 import { applyPixelCtx, drawPixelBurst, fillPixelText, fillBrick, palette, pixelBar } from '../ui/pixel.js';
-import { THEME, drawStageBg, drawWarnLine, drawDropGuide, drawScoreChip, drawNextChip, drawLevelBadge, drawCardProgress, drawTopBar, drawBanner } from '../ui/hud.js';
+import { drawStageBg, drawWarnLine, drawDropGuide, drawScoreChip, drawNextChip, drawLevelBadge, drawCardProgress, drawTopBar, drawBanner } from '../ui/hud.js';
 import { clamp, pickHalf } from '../core/utils.js';
 import {
   playerMaxHP,
@@ -73,6 +75,7 @@ import {
   fruitWallDamageMul,
   coreZombieHp,
   coreZombieRadius,
+  zombieRadiusMul,
   fruitMaxLevelStart,
   fruitMaxLevelCap,
   fruitGrowEvery,
@@ -208,8 +211,9 @@ export default class FruitVsZombieState extends BaseState {
     this.adBtn = new Button({
       x: 38, y: 250, w: 365, h: 108,
       text: '📺 看广告', bgColor: 'rgba(255,255,255,0.18)', fontSize: 48,
-      onTap: () => showToast('广告位预留，敬请期待')
+      onTap: () => { watchRewardAd(0).then((r) => { if (r.ok) showToast('感谢支持'); }); }
     });
+    this.payBtn = makePayButton(g, 38, 370, 280, 72, 30);
     this.settings = new SettingsModal(g, {
       onExitGame: () => {
         g.audio.stopBgm();
@@ -222,7 +226,7 @@ export default class FruitVsZombieState extends BaseState {
     // （若流程里给本阶段配了后续阶段，则显示"下一阶段"直接晋级）
     this.debugBtn = this._makeDebugSkipButton();
 
-    g.audio.startBgm();
+    g.audio.startBgm('zombie');
   }
 
   // ---------------- 双线战场搭建 ----------------
@@ -231,7 +235,7 @@ export default class FruitVsZombieState extends BaseState {
    * 搭建左半区 3x3 神器格 + 血墙 + 墙13 + 尸核舱 + 中隔墙。
    * 布局（自上而下）：警戒线 →（间隙）→ 墙1-3 → 神器行1 → 墙4-6 → 神器行2
    *   → 墙7-9 → 神器行3 → 墙10-12 →（间隙）→ 墙13 → 尸核舱（尸核）→ 地面。
-   * 血墙：12 段横墙（4 行 × 3 段，血量按行取 wallHpRanges）+ 墙13（整宽 3000）。
+   * 血墙：12 段横墙（4 行 × 3 段，血量按行取 wallHpRanges）+ 墙13（整宽 wall13Hp）。
    * 无血墙（不可摧毁）：格子间的 6 段竖隔板 + 左右半区之间的中隔墙。
    */
   _buildArena() {
@@ -306,7 +310,7 @@ export default class FruitVsZombieState extends BaseState {
       }
     }
 
-    // ---- 尸核：血红色静态球，不会向上移动，5000 血 ----
+    // ---- 尸核：血红色静态球，不会向上移动 ----
     const core = new Body(dividerX / 2, this.floorY - coreRadius - 8, coreRadius, 0, physicsDefaults);
     core.isStatic = true;
     core.isCore = true;
@@ -416,7 +420,7 @@ export default class FruitVsZombieState extends BaseState {
   /** 普通出怪：右半区底部随机位置刷一只（等级随时间偏弱成长） */
   _spawnZombie() {
     const lvl = timedWeightedLevelIndex(this._zombieMaxLevel(), this.elapsed, zombieBiasEvery);
-    const r = levels[lvl].radius;
+    const r = levels[lvl].radius * zombieRadiusMul;
     const range = this._spawnXRange(r);
     const x = range ? range[0] + Math.random() * (range[1] - range[0]) : (this.dividerX + this.game.screenW) / 2;
     this._addZombie(x, this.floorY - r, r, lvl);
@@ -431,7 +435,7 @@ export default class FruitVsZombieState extends BaseState {
     const rows = 2 + Math.floor(Math.random() * (phalanxMaxRows - 1)); // 2..maxRows
     const lvlMax = Math.min(phalanxLevelMax, this._zombieMaxLevel());
     const lvl = Math.floor(Math.random() * (lvlMax + 1));
-    const r = levels[lvl].radius;
+    const r = levels[lvl].radius * zombieRadiusMul;
     const spacing = r * 2 + 8;
     const range = this._spawnXRange(r);
     // 出怪区摆不下这么多列就自动减列，避免方阵溢出到右边界外挤成一坨
@@ -778,7 +782,7 @@ export default class FruitVsZombieState extends BaseState {
     if (!this.current && (this.spawnDelay === undefined || this.spawnDelay <= 0)) {
       this.spawnNew();
     }
-    this.game.audio.startBgm();
+    this.game.audio.startBgm('zombie');
     showToast('复活成功！血量回满，僵尸被驱散一半');
   }
 
@@ -910,7 +914,7 @@ export default class FruitVsZombieState extends BaseState {
     const H = g.screenH;
 
     applyPixelCtx(ctx);
-    drawStageBg(ctx, W, H, this.floorY, THEME.zombie);
+    drawStageBg(ctx, W, H, this.floorY, 'zombie');
 
     const flash = this.damageFlash > 0 && Math.floor(Date.now() / 150) % 2 === 0;
     drawWarnLine(ctx, W, this.warnY, flash);
@@ -956,7 +960,7 @@ export default class FruitVsZombieState extends BaseState {
     }
 
     if (this.current) {
-      drawDropGuide(ctx, this.current.x, this.current.y, this.current.r, this.floorY, 'rgba(26,36,16,0.35)');
+      drawDropGuide(ctx, this.current.x, this.current.y, this.current.r, this.floorY, 'rgba(180,255,140,0.35)');
       drawBall(ctx, this.current.x, this.current.y, this.current.r, this.current.level);
     }
 
@@ -1003,10 +1007,12 @@ export default class FruitVsZombieState extends BaseState {
     }
 
     this.adBtn.render(ctx);
+    this.payBtn.render(ctx);
     this.settingsBtn.render(ctx);
     if (this.debugBtn) this.debugBtn.render(ctx);
     this.settings.render(ctx);
     this.cardSystem.render(ctx);
+    g.payModal.render(ctx);
   }
 
   /** 尸核血条填充宽度（纯计算，便于测试） */
@@ -1031,24 +1037,29 @@ export default class FruitVsZombieState extends BaseState {
 
   onTouchStart(t) {
     if (this.settings.handleTouch('start', t)) return;
+    if (this.game.payModal.handleTouch('start', t)) return;
     if (this.cardSystem.handleTouch('start', t)) return;
     this.settingsBtn.handleTouch('start', t);
     this.adBtn.handleTouch('start', t);
+    this.payBtn.handleTouch('start', t);
     if (this.debugBtn) this.debugBtn.handleTouch('start', t);
   }
 
   onTouchMove(t) {
     if (this.settings.handleTouch('move', t)) return;
+    if (this.game.payModal.handleTouch('move', t)) return;
     if (this.cardSystem.handleTouch('move', t)) return;
     this.touchX = t.x;
   }
 
   onTouchEnd(t) {
     if (this.settings.handleTouch('end', t)) return;
+    if (this.game.payModal.handleTouch('end', t)) return;
     if (this.cardSystem.handleTouch('end', t)) return;
     // UI 按钮优先，其余任意位置抬起即投放
     if (this.settingsBtn.handleTouch('end', t)) return;
     if (this.adBtn.handleTouch('end', t)) return;
+    if (this.payBtn.handleTouch('end', t)) return;
     if (this.debugBtn && this.debugBtn.handleTouch('end', t)) return;
     this.touchX = t.x;
     this._dropCurrent();

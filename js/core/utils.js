@@ -69,23 +69,33 @@ export const storage = {
   }
 };
 
-/** 音效管理：复用 audio/ 目录现有素材 */
+/** 音效管理：分场景 BGM + 碰撞音效 */
+const BGM_SRC = {
+  lobby: 'audio/bgm-lobby.wav',
+  merge: 'audio/bgm-merge.wav',
+  zombie: 'audio/bgm-zombie.wav',
+  resultFail: 'audio/bgm-result-fail.wav',
+  resultWin: 'audio/bgm-result-win.wav'
+};
+
 export class AudioMgr {
   constructor() {
     this.enabled = storage.isSoundOn();
     this.ctxs = {};
-    // BGM 是否"应该"在播（局内进入时置 true，退出局内置 false）。
-    // 与 enabled 分开记录，才能在关掉音效再打开时恢复背景音乐。
-    this.bgmWanted = false;
-    this._init('bgm', 'audio/bgm.mp3', true);
-    this._init('boom', 'audio/boom.mp3', false);
+    // 当前应当播放的 BGM 名（lobby/merge/zombie/...）。null 表示不该有 BGM。
+    this.bgmWanted = null;
+    this.bgmKey = null;
+    for (const [key, src] of Object.entries(BGM_SRC)) {
+      this._init(key, src, true, 0.4);
+    }
+    this._init('boom', 'audio/boom.wav', false, 0.9);
   }
-  _init(key, src, loop) {
+  _init(key, src, loop, volume) {
     try {
       const c = wx.createInnerAudioContext();
       c.src = src;
       c.loop = loop;
-      c.volume = loop ? 0.4 : 0.9;
+      c.volume = volume;
       this.ctxs[key] = c;
     } catch (e) {
       // 音频创建失败不阻塞游戏
@@ -99,32 +109,46 @@ export class AudioMgr {
     try { c.stop(); } catch (e) {}
     c.play();
   }
-  startBgm() {
-    this.bgmWanted = true;
-    if (!this.enabled) return;
-    const c = this.ctxs.bgm;
-    if (c) c.play();
+  startBgm(name) {
+    if (name) this.bgmWanted = name;
+    if (!this.enabled || !this.bgmWanted) return;
+    this._playBgm(this.bgmWanted);
   }
-  /** 停止 BGM 并清除"应该有 BGM"标记（离开局内时调用） */
+  /** 停止 BGM 并清除"应该有 BGM"标记（离开场景时调用） */
   stopBgm() {
-    this.bgmWanted = false;
+    this.bgmWanted = null;
     this._stopBgmPlayback();
+  }
+
+  _playBgm(name) {
+    if (this.bgmKey && this.bgmKey !== name) {
+      const prev = this.ctxs[this.bgmKey];
+      if (prev) { try { prev.stop(); } catch (e) {} }
+    }
+    this.bgmKey = name;
+    const c = this.ctxs[name];
+    if (c) {
+      try { if (typeof c.seek === 'function') c.seek(0); } catch (e) {}
+      c.play();
+    }
   }
 
   /** 仅停止播放，不改变 bgmWanted（关闭音效开关时用） */
   _stopBgmPlayback() {
-    const c = this.ctxs.bgm;
-    if (c) { try { c.stop(); } catch (e) {} }
+    if (this.bgmKey) {
+      const c = this.ctxs[this.bgmKey];
+      if (c) { try { c.stop(); } catch (e) {} }
+      this.bgmKey = null;
+    }
   }
 
   setEnabled(v) {
     this.enabled = v;
     storage.setSoundOn(v);
     if (v) {
-      // 重新开启音效：若当前处于"应该有 BGM"的场景（局内），立即恢复播放
       if (this.bgmWanted) this.startBgm();
     } else {
-      this._stopBgmPlayback(); // 只停播放，保留 bgmWanted，便于再次开启时恢复
+      this._stopBgmPlayback();
     }
   }
 }

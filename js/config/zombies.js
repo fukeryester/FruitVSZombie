@@ -14,27 +14,26 @@ export const playerMaxHP = 36;
 
 /** 僵尸爬升总加速度（px/s²，须 > GRAVITY 才有净向上力；净加速度 = 本值 - GRAVITY）。
  *  5120 → 净 120：初始移动进一步放缓（肉鸽割草节奏：数量施压而非单兵速度）。 */
-export const zombieClimbAccel = 5120;
+export const zombieClimbAccel = 5080;
 
 /** 僵尸爬升最大速度（px/s，终端速度）。
- *  恒定加速度不封顶会越爬越快（净 120 加速 5 秒即 600px/s），
- *  封顶后怪潮稳定缓慢推进（底部 → 警戒线约 4~5 秒），配合大批量出怪营造割草感。 */
-export const zombieMaxClimbSpeed = 300;
+ *  恒定加速度不封顶会越爬越快（净 80 加速 5 秒即 400px/s），
+ *  封顶后怪潮稳定缓慢推进，配合大批量出怪营造割草感。 */
+export const zombieMaxClimbSpeed = 210;
 
-/** 出怪间隔（秒）：从 start 随时间线性缩短到 min。
- *  2.0 → 0.7：大水果分裂机制让输出大幅提升，怪潮同步加密以维持压力。 */
-export const zombieSpawnIntervalStart = 2.0;
-export const zombieSpawnIntervalMin = 0.7;
+/** 出怪间隔（秒）：从 start 随时间线性缩短到 min。 */
+export const zombieSpawnIntervalStart = 1.35;
+export const zombieSpawnIntervalMin = 0.48;
 /** 每过 1 秒间隔缩短多少秒 */
 export const zombieSpawnIntervalDecay = 0.02;
 
 /**
- * 出怪波次数量（更大批量：开局每波 3 只，每 growEvery 秒 +1，封顶 waveMax）。
+ * 出怪波次数量（开局每波 5 只，每 growEvery 秒 +1，封顶 waveMax）。
  * 与"间隔缩短"叠加，越后期同屏压力越大 —— 数量大但强度弱。
  */
-export const zombieWaveStart = 3;
-export const zombieWaveMax = 8;
-export const zombieWaveGrowEvery = 35;
+export const zombieWaveStart = 5;
+export const zombieWaveMax = 12;
+export const zombieWaveGrowEvery = 28;
 
 /** 僵尸等级上限随时间成长：初始 maxLevelStart 级，每 growEvery 秒 +1，封顶 maxLevelCap。
  *  初始 0（r 42）且封顶 3（r 100）：单个僵尸强度大幅下调，聚焦割草感。 */
@@ -49,9 +48,9 @@ export const zombieBiasEvery = 45;
  * 方阵僵尸：每波出怪时以 phalanxChance 概率改为刷出一个 x*y 矩阵方阵。
  * 方阵按矩阵摆位出场（仅低等级），出场后逻辑与普通僵尸一致（各跑各的）。
  */
-export const phalanxChance = 0.15;
-export const phalanxMaxCols = 4;
-export const phalanxMaxRows = 3;
+export const phalanxChance = 0.22;
+export const phalanxMaxCols = 5;
+export const phalanxMaxRows = 4;
 export const phalanxLevelMax = 1;
 
 /** 越线伤害 = 僵尸等级 + zombieDamageBase（越大扣越多） */
@@ -119,17 +118,17 @@ export const wallSplitStackGap = 2.1;
  * 玩家自上而下逐层"挖掘"逼近尸核。
  */
 export const wallHpRanges = [
-  [350, 550],    // 墙1-3
-  [950, 1150],   // 墙4-6
-  [1500, 2000],  // 墙7-9
-  [2500, 3000]   // 墙10-12
+  [2100, 3300],    // 墙1-3  ×6
+  [5700, 6900],    // 墙4-6
+  [9000, 12000],   // 墙7-9
+  [15000, 18000]   // 墙10-12
 ];
 
 /** 墙13（网格正下方、尸核舱顶盖，横跨左半区整宽）血量 */
-export const wall13Hp = 3000;
+export const wall13Hp = 18000;
 
 /** 尸核血量 / 半径（血红色静态球，不会向上移动） */
-export const coreMaxHp = 5000;
+export const coreMaxHp = 30000;
 export const coreRadius = 62;
 
 /** 水果对墙 / 尸核的伤害 = 水果半径 × 本系数（半径越大伤害越高） */
@@ -138,7 +137,10 @@ export const fruitWallDamageMul = 5;
 /** 尸核被水果砸中时孵化小僵尸：数量 = 本次伤害 / 每个小僵尸血量 */
 export const coreZombieHp = 400;
 /** 尸核孵化的小僵尸半径 */
-export const coreZombieRadius = 30;
+export const coreZombieRadius = 22;
+
+/** 僵尸半径 = 同级水果半径 × 该系数（缩小单兵体积，给数量腾空间） */
+export const zombieRadiusMul = 0.75;
 
 // ---------------- 水果（弹药）成长 ----------------
 

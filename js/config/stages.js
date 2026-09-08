@@ -11,14 +11,14 @@
 /**
  * 线性关卡流程（唯一的关卡顺序声明处）
  * ------------------------------------------------------------------
- * 大厅 → fruitMerge（水果合成）→ fruitVsZombie（水果大战僵尸）→ fruitVsSnake（水果大战怪蛇）→ …
+ * 大厅 → fruitMerge（水果合成）→ fruitVsZombie（水果大战僵尸）→ 结算
  * 后续新增阶段只需：
  *   1. 在此数组追加阶段 id；
  *   2. 在 main.js 的 stageFactories 里补一个工厂。
  * 流程末端之外的规则由 main.createNextStageState 统一处理：
  * 当前阶段已是最后一关 → 通关后直接进入结算（ResultState）。
  */
-export const STAGE_IDS = ['fruitMerge', 'fruitVsZombie', 'fruitVsSnake'];
+export const STAGE_IDS = ['fruitMerge', 'fruitVsZombie'];
 
 /** 最终阶段（无后续 state）达成目标后，延迟多少秒进入结算（横幅倒计时） */
 export const FINAL_CLEAR_DELAY = 3;

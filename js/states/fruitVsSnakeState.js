@@ -41,7 +41,7 @@ import {
   drawSnakeConnection
 } from '../ui/ballRenderer.js';
 import { applyPixelCtx, drawPixelBurst } from '../ui/pixel.js';
-import { THEME, drawStageBg, drawWarnLine, drawDropGuide, drawScoreChip, drawNextChip, drawLevelBadge, drawCardProgress, drawTopBar, drawBanner } from '../ui/hud.js';
+import { drawStageBg, drawWarnLine, drawDropGuide, drawScoreChip, drawNextChip, drawLevelBadge, drawCardProgress, drawTopBar, drawBanner } from '../ui/hud.js';
 import { clamp } from '../core/utils.js';
 import {
   snakeWarnY,
@@ -219,7 +219,7 @@ export default class FruitVsSnakeState extends BaseState {
     // 调试包体（开发者工具/体验版）专属：左下角"跳到结算"按钮
     this.debugBtn = this._makeDebugSkipButton();
 
-    g.audio.startBgm();
+    g.audio.startBgm('zombie');
   }
 
   // ---------------- 蜿蜒蛇生成 ----------------
@@ -540,7 +540,7 @@ revive() {
     if (!this.current && (this.spawnDelay === undefined || this.spawnDelay <= 0)) {
       this.spawnNew();
     }
-    this.game.audio.startBgm();
+    this.game.audio.startBgm('zombie');
     showToast('复活成功！蛇退回原位');
   }
 
@@ -679,7 +679,7 @@ revive() {
     const H = g.screenH;
 
     applyPixelCtx(ctx);
-    drawStageBg(ctx, W, H, this.floorY, THEME.snake);
+    drawStageBg(ctx, W, H, this.floorY, 'zombie');
 
     const warnFlash = this.snakeWarnFlash > 0 && Math.floor(Date.now() / 120) % 2 === 0;
     drawWarnLine(ctx, W, this.warnY, warnFlash);

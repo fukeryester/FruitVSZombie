@@ -11,6 +11,8 @@
 import { BaseState } from '../core/stateMachine.js';
 import { PhysicsWorld, Body } from '../core/physics.js';
 import { Button, SettingsModal, showToast, clearToasts } from '../ui/widgets.js';
+import { makePayButton } from '../ui/payModal.js';
+import { watchRewardAd } from '../core/adApi.js';
 import { CardSystem } from '../cards/index.js';
 import { levels, spawnPoolSize, physicsDefaults } from '../config/balls.js';
 import { stageScoreGoal, stageTip } from '../config/stages.js';
@@ -18,7 +20,7 @@ import { isDebugBuild } from '../config/debug.js';
 import { getCardTriggerCount } from '../config/level.js';
 import { drawBall } from '../ui/ballRenderer.js';
 import { applyPixelCtx, drawPixelBurst, palette } from '../ui/pixel.js';
-import { THEME, drawStageBg, drawWarnLine, drawDropGuide, drawScoreChip, drawNextChip, drawLevelBadge, drawCardProgress, drawTopBar, drawBanner } from '../ui/hud.js';
+import { drawStageBg, drawWarnLine, drawDropGuide, drawScoreChip, drawNextChip, drawLevelBadge, drawCardProgress, drawTopBar, drawBanner } from '../ui/hud.js';
 import { weightedLevelIndex, clamp, pickHalfExcludingMax } from '../core/utils.js';
 
 /**
@@ -127,8 +129,9 @@ export default class FruitMergeState extends BaseState {
     this.adBtn = new Button({
       x: 38, y: 250, w: 365, h: 108,
       text: '📺 看广告', bgColor: 'rgba(255,255,255,0.18)', fontSize: 48,
-      onTap: () => showToast('广告位预留，敬请期待')
+      onTap: () => { watchRewardAd(0).then((r) => { if (r.ok) showToast('感谢支持'); }); }
     });
+    this.payBtn = makePayButton(g, 38, 370, 280, 72, 30);
     this.settings = new SettingsModal(g, {
       // 局内退出：放弃本局回大厅
       onExitGame: () => {
@@ -142,7 +145,7 @@ export default class FruitMergeState extends BaseState {
     // 正式包（envVersion === 'release'）不创建、不渲染、不响应触摸。
     this.debugBtn = this._makeDebugSkipButton();
 
-    g.audio.startBgm();
+    g.audio.startBgm('merge');
   }
 
   /** 调试跳段按钮：有下一阶段 → 直接晋级；已是最终关 → 直接进结算 */
@@ -307,7 +310,7 @@ export default class FruitMergeState extends BaseState {
     if (!this.current && (this.spawnDelay === undefined || this.spawnDelay <= 0)) {
       this.spawnNew();
     }
-    this.game.audio.startBgm();
+    this.game.audio.startBgm('merge');
     showToast('复活成功！已消除一半水果');
   }
 
@@ -416,7 +419,7 @@ export default class FruitMergeState extends BaseState {
     const H = g.screenH;
 
     applyPixelCtx(ctx);
-    drawStageBg(ctx, W, H, this.floorY, THEME.merge);
+    drawStageBg(ctx, W, H, this.floorY, 'merge');
 
     const violationRatio = this.violationTimer / this.VIOLATION_LIMIT;
     const flash = violationRatio > 0 && Math.floor(Date.now() / 200) % 2 === 0;
@@ -468,10 +471,12 @@ export default class FruitMergeState extends BaseState {
     }
 
     this.adBtn.render(ctx);
+    this.payBtn.render(ctx);
     this.settingsBtn.render(ctx);
     if (this.debugBtn) this.debugBtn.render(ctx);
     this.settings.render(ctx);
     this.cardSystem.render(ctx);
+    g.payModal.render(ctx);
   }
 
   _scoreBarFillWidth(bw) {
@@ -503,24 +508,29 @@ export default class FruitMergeState extends BaseState {
 
   onTouchStart(t) {
     if (this.settings.handleTouch('start', t)) return;
+    if (this.game.payModal.handleTouch('start', t)) return;
     if (this.cardSystem.handleTouch('start', t)) return;
     this.settingsBtn.handleTouch('start', t);
     this.adBtn.handleTouch('start', t);
+    this.payBtn.handleTouch('start', t);
     if (this.debugBtn) this.debugBtn.handleTouch('start', t);
   }
 
   onTouchMove(t) {
     if (this.settings.handleTouch('move', t)) return;
+    if (this.game.payModal.handleTouch('move', t)) return;
     if (this.cardSystem.handleTouch('move', t)) return;
     this.touchX = t.x;
   }
 
   onTouchEnd(t) {
     if (this.settings.handleTouch('end', t)) return;
+    if (this.game.payModal.handleTouch('end', t)) return;
     if (this.cardSystem.handleTouch('end', t)) return;
     // UI 按钮优先
     if (this.settingsBtn.handleTouch('end', t)) return;
     if (this.adBtn.handleTouch('end', t)) return;
+    if (this.payBtn.handleTouch('end', t)) return;
     if (this.debugBtn && this.debugBtn.handleTouch('end', t)) return;
     // UI 按钮优先，其余任意位置抬起即投放
     this.touchX = t.x;
