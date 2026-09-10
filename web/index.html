@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>水果大战僵尸 · 四人联机</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0a0612;
+      touch-action: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    #stage {
+      position: relative;
+      width: min(100vw, calc(100vh * 9 / 19.5));
+      height: min(100vh, calc(100vw * 19.5 / 9));
+      background: #1a1030;
+    }
+    #stage canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+
+    /* 昵称输入浮层：画布里画不出真正的输入法，所以用一层 HTML 盖上去。
+       它是排行榜主键与联机名牌的唯一录入口（见 js/core/playerName.js）。 */
+    #prompt {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(8, 4, 18, 0.86);
+      z-index: 10;
+    }
+    #prompt.on { display: flex; }
+    #prompt .box {
+      width: min(78%, 420px);
+      padding: 22px 22px 18px;
+      background: #241830;
+      border: 5px solid #f4ead2;
+      box-shadow: 0 0 0 5px #120a1c;
+      color: #fff7e8;
+      text-align: center;
+    }
+    #prompt h3 {
+      margin: 0 0 6px;
+      font-size: 20px;
+      color: #ffd24a;
+      letter-spacing: 1px;
+    }
+    #prompt p {
+      margin: 0 0 14px;
+      font-size: 12px;
+      line-height: 1.6;
+      color: rgba(255, 247, 232, 0.66);
+    }
+    #prompt input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 12px 10px;
+      font-size: 18px;
+      text-align: center;
+      color: #241830;
+      background: #f4ead2;
+      border: 4px solid #120a1c;
+      outline: none;
+    }
+    #prompt .row {
+      display: flex;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    #prompt button {
+      flex: 1;
+      padding: 12px 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: #241830;
+      background: #ffd24a;
+      border: 4px solid #120a1c;
+      cursor: pointer;
+    }
+    #prompt button.ghost {
+      color: #fff7e8;
+      background: #4a3a5e;
+    }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <div id="prompt">
+      <div class="box">
+        <h3 id="prompt-title">你的游戏名</h3>
+        <p id="prompt-tip"></p>
+        <input id="prompt-input" type="text" maxlength="12" autocomplete="off" />
+        <div class="row">
+          <button class="ghost" id="prompt-cancel">取消</button>
+          <button id="prompt-ok">确定</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- 房间 SDK：优先用站点最新版，取不到再回退包内副本（见 js/net/roomClient.js） -->
+  <script src="/static/gamehub-room.js" onerror="this.onerror=null;"></script>
+  <script src="./wx-shim.js"></script>
+  <script type="module" src="./game.js"></script>
+</body>
+</html>

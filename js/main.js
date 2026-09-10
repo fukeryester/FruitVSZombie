@@ -7,12 +7,19 @@ import { updateToasts, renderToasts } from './ui/widgets.js';
 import { applyPixelCtx } from './ui/pixel.js';
 import { preloadSprites } from './ui/assets.js';
 import LobbyState from './states/lobbyState.js';
+import StatsState from './states/statsState.js';
+import RoomState from './states/roomState.js';
 import FruitMergeState from './states/fruitMergeState.js';
 import FruitVsZombieState from './states/fruitVsZombieState.js';
 import ResultState from './states/resultState.js';
 import { STAGE_IDS } from './config/stages.js';
 import { playerLevelStart, resetPlayerLevel } from './config/level.js';
 import { PayModal } from './ui/payModal.js';
+import { MatchSession } from './net/session.js';
+import { progress } from './net/progress.js';
+import { RunStats } from './core/runStats.js';
+import { loadPlayerName, savePlayerName } from './core/playerName.js';
+import { showToast } from './ui/widgets.js';
 
 /**
  * 设计分辨率宽度
@@ -67,9 +74,35 @@ export default class Main {
     this.playerLevel = playerLevelStart;
     this.resetPlayerLevel = () => { this.playerLevel = resetPlayerLevel(); };
 
+    // ---- 联机 ----
+    // 昵称是排行榜主键，也是房间里的名牌；没存过就随机生成一个。
+    this.playerName = loadPlayerName();
+    // 微信小游戏包 / 无头测试里 MatchSession.supported 为 false，net 恒为 null，
+    // 全部联机分支自动短路，游戏退化成与改造前完全一致的单机。
+    this.net = MatchSession.supported ? new MatchSession() : null;
+    if (this.net) this.net.playerName = this.playerName;
+    this.setPlayerName = (name) => {
+      this.playerName = savePlayerName(name);
+      if (this.net) this.net.setPlayerName(this.playerName);
+      return this.playerName;
+    };
+    /** 是否处于联机对局中（局内 state 用它决定要不要走同步） */
+    this.isOnline = () => !!(this.net && this.net.inMatch);
+
+    // ---- 平台统计 / 成就 / 排行榜 ----
+    // 本局战绩按座位分桶累计（跨阶段），结算时由 host 广播、各端只上报自己那格。
+    this.runStats = new RunStats();
+    this.progress = progress;
+    // 加载 SDK + 拉一次目录；未登录 / 微信包 / 无头测试里会静默降级成空转。
+    progress.init();
+    // 平台解锁成就时局内飘一条，玩家不用切出去看
+    progress.onUnlock((item) => showToast(`🏆 成就解锁：${item.name || item.id}`));
+
     // 状态机 + 状态工厂（延迟创建，保证每次进入都是全新状态）
     this.states = new StateMachine(this);
     this.createLobbyState = () => new LobbyState(this);
+    this.createRoomState = () => new RoomState(this);
+    this.createStatsState = () => new StatsState(this);
 
     // ---- 线性关卡流程：大厅 → 水果合成 → 水果大战僵尸 → … →（最终关）结算 ----
     // 顺序唯一声明处在 config/stages.js 的 STAGE_IDS；这里只登记各阶段工厂。
@@ -85,7 +118,14 @@ export default class Main {
     /** 创建指定阶段的实例（不校验顺序，仅按 id 查工厂） */
     this.createStageState = (id, carryScore = 0) => {
       const s = this.stageFlow.find((it) => it.id === id);
-      return s ? s.create(carryScore) : null;
+      if (!s) return null;
+      // 进入**第一关**就是新一局的开始。单机、host、guest 三条入口都会走到这里，
+      // 所以战绩清零放这儿最省事，不用在三个地方各写一遍。
+      if (id === this.stageFlow[0].id) {
+        this.runStats.reset();
+        this.runStats.online = this.isOnline();
+      }
+      return s.create(carryScore);
     };
     /** 当前阶段是否还有后续阶段（false = 已是最终关，通关即结算） */
     this.hasNextStage = (id) => {
@@ -102,6 +142,9 @@ export default class Main {
     this.createResultState = (playing, opts) => new ResultState(this, playing, opts);
 
     this.states.switchTo(this.createLobbyState());
+
+    // 调试句柄：真机调试面板 / 浏览器自检里可以直接读当前 state、名册与同步状态
+    GameGlobal.game = this;
 
     // 触摸事件
     wx.onTouchStart((e) => {
@@ -135,6 +178,7 @@ export default class Main {
 
     // 异常保护：单帧出错只跳过该帧，绝不中断 rAF 链（否则画面永久冻结）
     try {
+      if (this.net) this.net.update(); // 把积压的关键报文冲出去
       applyPixelCtx(this.ctx);
       this.states.update(dt);
       this.states.render(this.ctx);

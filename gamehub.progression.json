@@ -1,0 +1,380 @@
+{
+  "version": 1,
+  "stats": [
+    {
+      "id": "games_played",
+      "display_name": "游戏局数",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 4,
+      "increment_only": true,
+      "aggregate": true
+    },
+    {
+      "id": "mp_games_played",
+      "display_name": "联机局数",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 4,
+      "increment_only": true,
+      "aggregate": true
+    },
+    {
+      "id": "stage_clears",
+      "display_name": "通关次数",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 4,
+      "increment_only": true,
+      "aggregate": true
+    },
+    {
+      "id": "deaths",
+      "display_name": "阵亡次数",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 4,
+      "increment_only": true,
+      "aggregate": true
+    },
+    {
+      "id": "fruits_dropped",
+      "display_name": "投放水果数",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 2000,
+      "increment_only": true,
+      "aggregate": true
+    },
+    {
+      "id": "merges",
+      "display_name": "触发合成次数",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 2000,
+      "increment_only": true,
+      "aggregate": true
+    },
+    {
+      "id": "watermelons_made",
+      "display_name": "合成大西瓜数",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 200,
+      "increment_only": true,
+      "aggregate": true
+    },
+    {
+      "id": "zombie_kills",
+      "display_name": "击杀僵尸数",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 5000,
+      "increment_only": true,
+      "aggregate": true
+    },
+    {
+      "id": "cards_picked",
+      "display_name": "选择卡牌数",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 200,
+      "increment_only": true,
+      "aggregate": true
+    },
+    {
+      "id": "total_score",
+      "display_name": "累计得分",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 1000000,
+      "increment_only": true,
+      "aggregate": true
+    },
+    {
+      "id": "mp_wins",
+      "display_name": "联机夺冠次数",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 4,
+      "increment_only": true,
+      "aggregate": true
+    },
+    {
+      "id": "best_score",
+      "display_name": "单局最高得分",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 100000000,
+      "increment_only": true
+    },
+    {
+      "id": "best_zombie_kills",
+      "display_name": "单局最多击杀",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 100000,
+      "increment_only": true
+    },
+    {
+      "id": "best_wave",
+      "display_name": "最远波次",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 10000,
+      "increment_only": true
+    },
+    {
+      "id": "max_fruit_level",
+      "display_name": "最高合成等级",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 32,
+      "increment_only": true
+    },
+    {
+      "id": "best_survival_seconds",
+      "display_name": "单局最长生存",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 360000,
+      "increment_only": true
+    },
+    {
+      "id": "runs_reached_zombie",
+      "display_name": "打到僵尸关的局数",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max_delta": 4,
+      "increment_only": true,
+      "aggregate": true,
+      "hidden": true
+    }
+  ],
+  "leaderboards": [
+    { "id": "high_score", "name": "最高得分", "sort": "desc", "keep": "best", "display": "number" },
+    { "id": "top_kills", "name": "单局僵尸击杀", "sort": "desc", "keep": "best", "display": "number" },
+    { "id": "merge_master", "name": "累计合成次数", "sort": "desc", "keep": "best", "display": "number" },
+    { "id": "deep_run", "name": "最远波次", "sort": "desc", "keep": "best", "display": "number" },
+    { "id": "survivor", "name": "单局生存时长", "sort": "desc", "keep": "best", "display": "seconds" }
+  ],
+  "achievements": [
+    {
+      "id": "first_blood",
+      "name": "初次上路",
+      "description": "完成第一局游戏，踏上这条神奇的天路。",
+      "bind_stat": "games_played",
+      "unlock_at": 1
+    },
+    {
+      "id": "fruit_ninja",
+      "name": "水果忙人",
+      "description": "累计投放 200 个水果。手别停。",
+      "bind_stat": "fruits_dropped",
+      "unlock_at": 200
+    },
+    {
+      "id": "merge_apprentice",
+      "name": "合成学徒",
+      "description": "累计触发 100 次水果合成。",
+      "bind_stat": "merges",
+      "unlock_at": 100
+    },
+    {
+      "id": "watermelon_king",
+      "name": "大西瓜之王",
+      "description": "累计合成 10 个大西瓜。",
+      "bind_stat": "watermelons_made",
+      "unlock_at": 10
+    },
+    {
+      "id": "zombie_hunter",
+      "name": "僵尸猎人",
+      "description": "累计击杀 100 只僵尸。",
+      "bind_stat": "zombie_kills",
+      "unlock_at": 100
+    },
+    {
+      "id": "zombie_slayer",
+      "name": "尸潮终结者",
+      "description": "累计击杀 1000 只僵尸。尸潮到此为止。",
+      "bind_stat": "zombie_kills",
+      "unlock_at": 1000
+    },
+    {
+      "id": "card_collector",
+      "name": "海克斯收藏家",
+      "description": "累计选择 50 张卡牌。",
+      "bind_stat": "cards_picked",
+      "unlock_at": 50
+    },
+    {
+      "id": "score_10k",
+      "name": "万分选手",
+      "description": "单局得分达到 10000。",
+      "bind_stat": "best_score",
+      "unlock_at": 10000
+    },
+    {
+      "id": "wave_veteran",
+      "name": "尸潮老兵",
+      "description": "单局撑到第 10 波僵尸。",
+      "bind_stat": "best_wave",
+      "unlock_at": 10
+    },
+    {
+      "id": "the_end_of_road",
+      "name": "天路尽头",
+      "description": "通关水果大战僵尸，与我相会于死地。",
+      "bind_stat": "stage_clears",
+      "unlock_at": 1
+    },
+    {
+      "id": "team_champion",
+      "name": "联机冠军",
+      "description": "在四人联机对局中拿到第一名。",
+      "bind_stat": "mp_wins",
+      "unlock_at": 1
+    },
+    {
+      "id": "flawless_stage",
+      "name": "铜墙铁壁",
+      "description": "一滴血都不掉地通关僵尸关。",
+      "hidden": true
+    }
+  ],
+  "displays": [
+    {
+      "id": "total_kills",
+      "type": "number",
+      "title": "全服累计击杀僵尸",
+      "format": "integer",
+      "source": { "type": "stat_global", "stat_id": "zombie_kills", "agg": "sum" }
+    },
+    {
+      "id": "total_merges",
+      "type": "number",
+      "title": "全服累计合成次数",
+      "format": "integer",
+      "source": { "type": "stat_global", "stat_id": "merges", "agg": "sum" }
+    },
+    {
+      "id": "avg_kills",
+      "type": "number",
+      "title": "人均每局击杀",
+      "format": "decimal",
+      "source": {
+        "type": "binary",
+        "op": "div",
+        "left": { "type": "stat_global", "stat_id": "zombie_kills", "agg": "sum" },
+        "right": { "type": "stat_global", "stat_id": "games_played", "agg": "sum" }
+      }
+    },
+    {
+      "id": "clear_rate",
+      "type": "number",
+      "title": "通关率",
+      "format": "percent",
+      "source": {
+        "type": "binary",
+        "op": "div",
+        "left": { "type": "stat_global", "stat_id": "stage_clears", "agg": "sum" },
+        "right": { "type": "stat_global", "stat_id": "games_played", "agg": "sum" }
+      }
+    },
+    {
+      "id": "top_score_global",
+      "type": "number",
+      "title": "全服单局最高分",
+      "format": "integer",
+      "source": { "type": "stat_global", "stat_id": "best_score", "agg": "max" }
+    },
+    {
+      "id": "total_playtime",
+      "type": "number",
+      "title": "全服总游玩时长",
+      "format": "duration_s",
+      "source": { "type": "playtime", "agg": "sum" }
+    },
+    {
+      "id": "outcome_pie",
+      "type": "pie",
+      "title": "结局构成：通关 vs 阵亡",
+      "series": [
+        { "label": "通关", "color": "#5DB85C", "source": { "type": "stat_global", "stat_id": "stage_clears", "agg": "sum" } },
+        { "label": "阵亡", "color": "#D63C4A", "source": { "type": "stat_global", "stat_id": "deaths", "agg": "sum" } }
+      ]
+    },
+    {
+      "id": "mode_pie",
+      "type": "pie",
+      "title": "单人 vs 联机",
+      "series": [
+        { "label": "联机局", "color": "#3A5680", "source": { "type": "stat_global", "stat_id": "mp_games_played", "agg": "sum" } },
+        {
+          "label": "单人局",
+          "color": "#E8A20C",
+          "source": {
+            "type": "binary",
+            "op": "sub",
+            "left": { "type": "stat_global", "stat_id": "games_played", "agg": "sum" },
+            "right": { "type": "stat_global", "stat_id": "mp_games_played", "agg": "sum" }
+          }
+        }
+      ]
+    },
+    {
+      "id": "action_bar",
+      "type": "bar",
+      "title": "全服行为总量",
+      "series": [
+        { "label": "投放水果", "color": "#A06EE0", "source": { "type": "stat_global", "stat_id": "fruits_dropped", "agg": "sum" } },
+        { "label": "触发合成", "color": "#F5A623", "source": { "type": "stat_global", "stat_id": "merges", "agg": "sum" } },
+        { "label": "击杀僵尸", "color": "#5D8A35", "source": { "type": "stat_global", "stat_id": "zombie_kills", "agg": "sum" } },
+        { "label": "选择卡牌", "color": "#8A6D9E", "source": { "type": "stat_global", "stat_id": "cards_picked", "agg": "sum" } },
+        { "label": "合成大西瓜", "color": "#2E9E4F", "source": { "type": "stat_global", "stat_id": "watermelons_made", "agg": "sum" } }
+      ]
+    },
+    {
+      "id": "avg_bar",
+      "type": "bar",
+      "title": "人均战绩",
+      "series": [
+        { "label": "人均局数", "color": "#3A5680", "source": { "type": "stat_global", "stat_id": "games_played", "agg": "avg" } },
+        { "label": "人均击杀", "color": "#5D8A35", "source": { "type": "stat_global", "stat_id": "zombie_kills", "agg": "avg" } },
+        { "label": "人均合成", "color": "#F5A623", "source": { "type": "stat_global", "stat_id": "merges", "agg": "avg" } },
+        { "label": "最佳成绩均值", "color": "#D63C4A", "source": { "type": "stat_global", "stat_id": "best_score", "agg": "avg" } }
+      ]
+    },
+    {
+      "id": "score_board",
+      "type": "leaderboard",
+      "title": "最高得分 TOP 10",
+      "board_id": "high_score",
+      "limit": 10
+    },
+    {
+      "id": "ach_rates",
+      "type": "achievement_rates",
+      "title": "成就全球完成率",
+      "ids": []
+    }
+  ]
+}

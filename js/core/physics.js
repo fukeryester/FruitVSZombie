@@ -34,6 +34,17 @@ export const STILL_TIME = 0.35;      // s：持续静止多久进入休眠
 export const WAKE_SPEED = 173;       // px/s：接触方速度超过此值唤醒休眠球
 export const SLEEP_MASS = 1e9;       // 休眠球视为静态支撑（近似无限质量）
 
+/**
+ * 联机同步 id 发号器。
+ * 全局单调递增（跨阶段不重置），保证 guest 那边「同一个 nid 永远是同一个刚体」，
+ * 插值时不会把两个不同的水果当成同一个来 lerp。
+ */
+let _nid = 0;
+function nextNid() {
+  _nid = (_nid + 1) % 1000000; // 六位内循环，够一局用，也让快照数字保持短
+  return _nid || 1;
+}
+
 export class Body {
   constructor(x, y, r, level, opts = {}) {
     this.x = x;
@@ -56,6 +67,8 @@ export class Body {
     this.isCore = false;      // 尸核（第二阶段核心目标）：带血量，被水果砸掉血
     this.isArtifact = false;  // 神器：被水果碰到后赋予玩家卡牌增益并消失
     this.noMerge = false;     // 禁止参与合成（如大水果撞墙分裂出的小水果）
+    this.nid = 0;             // 联机同步用的稳定 id，入场（world.add）时分配
+    this.owner = 0;           // 投放者座位号（联机计分归属；单机恒为 0）
   }
   get mass() {
     return (this.sleeping || this.isStatic) ? SLEEP_MASS : this.density * Math.PI * this.r * this.r;
@@ -81,9 +94,12 @@ export class PhysicsWorld {
     this.walls = [];
     // true = 关闭球与球之间的碰撞（球会互相穿透坠落到底层），地面与墙壁仍然生效
     this.noBodyCollide = false;
+    this._widSeq = 0;
   }
 
+  /** 墙入场，顺手发一个联机同步用的稳定编号（wid） */
   addWall(wall) {
+    if (!wall.wid) wall.wid = ++this._widSeq;
     this.walls.push(wall);
     this.wakeAll();
     return wall;
@@ -94,7 +110,12 @@ export class PhysicsWorld {
     this.wakeAll(); // 支撑结构变化，全场重新结算
   }
 
+  /**
+   * 入场。顺手分配联机同步 id —— add 是刚体进入世界的唯一入口，
+   * 在这里统一发号就不用在每个 new Body 的调用点各写一遍。
+   */
   add(body) {
+    if (!body.nid) body.nid = nextNid();
     this.bodies.push(body);
     this.wakeAll(); // 新球入场，全场重新结算
     return body;

@@ -9,6 +9,10 @@ node_modules/
 miniprogram_npm/
 dist/
 
+# 自检临时产物（解包目录与无头浏览器 profile）
+_webtest/
+_webtest-profile-*/
+
 # 系统与编辑器
 .DS_Store
 Thumbs.db

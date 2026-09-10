@@ -11,6 +11,9 @@ import { levels } from '../config/balls.js';
 import { drawBall } from '../ui/ballRenderer.js';
 import { applyPixelCtx, fillPixelText, palette } from '../ui/pixel.js';
 import { drawStageBg } from '../ui/hud.js';
+import { loadBoard } from '../core/leaderboard.js';
+import { askPlayerName } from '../core/playerName.js';
+import { MatchSession } from '../net/session.js';
 
 export default class LobbyState extends BaseState {
   onEnter() {
@@ -23,11 +26,45 @@ export default class LobbyState extends BaseState {
       y: g.screenH * 0.52,
       w: btnW,
       h: 100,
-      text: '开始游戏',
+      text: '单人游戏',
       bgColor: '#2e8b3a',
       fontSize: 40,
       onTap: () => g.states.switchTo(g.createPlayingState())
     });
+    // 联机入口：不支持的环境（微信小游戏包）直接不显示，避免点了没反应
+    this.netBtn = MatchSession.supported ? new Button({
+      x: (W - btnW) / 2,
+      y: g.screenH * 0.52 + 116,
+      w: btnW,
+      h: 92,
+      text: '联机对战（最多 4 人）',
+      bgColor: '#2f6fb0',
+      fontSize: 34,
+      onTap: () => g.states.switchTo(g.createRoomState())
+    }) : null;
+    const rowY = g.screenH * 0.52 + (this.netBtn ? 224 : 116);
+    // 数据档案：统计 / 成就 / 排行榜。和「改名」并排放在开始按钮下面一行
+    this.statsBtn = new Button({
+      x: (W - btnW) / 2,
+      y: rowY,
+      w: btnW - 158,
+      h: 68,
+      text: '📊 数据档案',
+      bgColor: '#3a5680',
+      fontSize: 28,
+      onTap: () => g.states.switchTo(g.createStatsState())
+    });
+    this.nameBtn = new Button({
+      x: (W - btnW) / 2 + btnW - 150,
+      y: rowY,
+      w: 150,
+      h: 68,
+      text: '改名',
+      bgColor: '#5a4a8a',
+      fontSize: 28,
+      onTap: () => this._rename()
+    });
+    this.board = loadBoard();
     this.settingsBtn = new Button({
       x: W - 110,
       y: 70,
@@ -60,6 +97,17 @@ export default class LobbyState extends BaseState {
     this.game.audio.stopBgm();
   }
 
+  async _rename() {
+    const next = await askPlayerName(this.game.playerName);
+    if (!next) {
+      showToast('当前环境无法输入昵称');
+      return;
+    }
+    this.game.setPlayerName(next);
+    this.board = loadBoard();
+    showToast(`昵称已改为 ${next}`);
+  }
+
   onUpdate(dt) {
     this.time += dt;
   }
@@ -88,19 +136,47 @@ export default class LobbyState extends BaseState {
     ctx.fillStyle = palette.gold;
     fillPixelText(ctx, `历史最高分：${g.bestScore}`, W / 2, g.screenH * 0.46, 32);
 
+    const champion = this.board[0];
+    ctx.fillStyle = 'rgba(255,247,232,0.7)';
+    fillPixelText(
+      ctx,
+      champion ? `榜首：${champion.name}  ${champion.score}` : '排行榜还空着，去刷个第一',
+      W / 2, g.screenH * 0.46 + 42, 24
+    );
+
     this.startBtn.render(ctx);
+    if (this.netBtn) this.netBtn.render(ctx);
+
+    this.statsBtn.render(ctx);
+    this.nameBtn.render(ctx);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,247,232,0.75)';
+    const tally = g.progress.achievementTally();
+    fillPixelText(
+      ctx,
+      tally.total
+        ? `我：${g.playerName}　成就 ${tally.done}/${tally.total}`
+        : `我：${g.playerName}`,
+      W / 2, this.nameBtn.y + 96, 24
+    );
+
     this.settingsBtn.render(ctx);
     this.payBtn.render(ctx);
     this.settings.render(ctx);
     g.payModal.render(ctx);
   }
 
+  _buttons() {
+    const list = [this.startBtn, this.settingsBtn, this.payBtn, this.nameBtn, this.statsBtn];
+    if (this.netBtn) list.push(this.netBtn);
+    return list;
+  }
+
   onTouchStart(t) {
     if (this.settings.handleTouch('start', t)) return;
     if (this.game.payModal.handleTouch('start', t)) return;
-    this.startBtn.handleTouch('start', t);
-    this.settingsBtn.handleTouch('start', t);
-    this.payBtn.handleTouch('start', t);
+    for (const b of this._buttons()) b.handleTouch('start', t);
   }
   onTouchMove(t) {
     if (this.settings.handleTouch('move', t)) return;
@@ -109,8 +185,8 @@ export default class LobbyState extends BaseState {
   onTouchEnd(t) {
     if (this.settings.handleTouch('end', t)) return;
     if (this.game.payModal.handleTouch('end', t)) return;
-    this.startBtn.handleTouch('end', t);
-    this.settingsBtn.handleTouch('end', t);
-    this.payBtn.handleTouch('end', t);
+    for (const b of this._buttons()) {
+      if (b.handleTouch('end', t)) return;
+    }
   }
 }

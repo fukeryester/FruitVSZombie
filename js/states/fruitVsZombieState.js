@@ -41,7 +41,13 @@ import { getCardTriggerCount } from '../config/level.js';
 import { drawBall, drawZombie, drawZombieCore, drawArtifact } from '../ui/ballRenderer.js';
 import { applyPixelCtx, drawPixelBurst, fillPixelText, fillBrick, palette, pixelBar } from '../ui/pixel.js';
 import { drawStageBg, drawWarnLine, drawDropGuide, drawScoreChip, drawNextChip, drawLevelBadge, drawCardProgress, drawTopBar, drawBanner } from '../ui/hud.js';
+import { drawRemoteLauncher, drawSelfLauncherRing, drawTeamPanel } from '../ui/netHud.js';
 import { clamp, pickHalf } from '../core/utils.js';
+import { StageSync } from '../net/stageSync.js';
+import { recordMerge } from '../core/runStats.js';
+import {
+  teamCoreHpScale, teamHpScale, teamWaveScale, maxZombiesOnField, MAX_PLAYERS
+} from '../config/net.js';
 import {
   playerMaxHP,
   zombieDamageBase,
@@ -128,6 +134,30 @@ export default class FruitVsZombieState extends BaseState {
     this.score = this.carryScore;
     this.dead = false;
 
+    // ---- 联机（单机时 sync.online 恒为 false，所有分支自动短路）----
+    this.sync = new StageSync(this, this.stageId);
+    this.mySeat = this.sync.mySeat;
+    this.seatScores = new Array(MAX_PLAYERS).fill(0);
+    if (g.carrySeatScores) {
+      this.seatScores = g.carrySeatScores.slice();
+      g.carrySeatScores = null;
+    } else {
+      this.seatScores[this.mySeat] = this.carryScore;
+    }
+    /** guest：host 随 STAGE 报文下发的场地描述 */
+    this.pendingArena = null;
+    const pending = g.net && g.net.pendingStage;
+    if (this.sync.isGuest && pending && pending.id === this.stageId) {
+      this.seatScores = pending.seatScores.slice();
+      this.pendingArena = pending.arena;
+      g.net.pendingStage = null;
+    }
+    const players = this.sync.playerCount;
+    /** 联机按人数放大：火力 ×n，尸核血量 / 血条 / 出怪量同步放大 */
+    this.coreMaxHp = Math.round(coreMaxHp * teamCoreHpScale(players));
+    this.maxHp = Math.round(playerMaxHP * teamHpScale(players));
+    this.waveScale = teamWaveScale(players);
+
     // 场地（与第一阶段同一套几何）
     this.floorY = H - 20;
     this.warnY = 327;
@@ -144,7 +174,9 @@ export default class FruitVsZombieState extends BaseState {
     this.dividerX = W * arenaLeftRatio;
     this.artifacts = [];
     this.core = null;
-    this._buildArena();
+    /** guest 渲染神器要用的 nid → 图标映射（随场地描述下发） */
+    this.artifactIcons = new Map();
+    this._buildArena(this.pendingArena);
     this.coreHpShown = this.core.maxHp; // 顶部尸核血条缓动显示值
 
     // 投放
@@ -156,8 +188,8 @@ export default class FruitVsZombieState extends BaseState {
     this.dropped = false;
     this.spawnNew();
 
-    // 玩家血量与受击反馈
-    this.hp = playerMaxHP;
+    // 玩家血量与受击反馈（联机时是全队共享的一条血）
+    this.hp = this.maxHp;
     this.damageFlash = 0;
 
     // 僵尸出怪
@@ -186,9 +218,10 @@ export default class FruitVsZombieState extends BaseState {
       getBodies: () => this.world.bodies.slice(),
       removeBody: (b) => this.world.remove(b),
       resizeBody: (b, r) => this.world.resize(b, r),
-      addScore: (n) => { this.score += n; },
-      addEffect: (e) => this.effects.push(e),
-      toast: showToast,
+      // 卡牌得分归属选出这张卡的玩家（applyingSeat 由 CardSystem 在结算时设置）
+      addScore: (n) => this._award(n, this.cardSystem.applyingSeat),
+      addEffect: (e) => this._burst(e),
+      toast: (text) => this._toast(text),
       playSound: (name) => g.audio.play(name),
       // 选卡弹出条件：只看水果是否稳定（僵尸永远在动，不能挡住选卡）
       isFieldCalm: () => this.world.bodies.every(b => b.isZombie || b.isStatic || Math.abs(b.vy) < 420),
@@ -200,7 +233,7 @@ export default class FruitVsZombieState extends BaseState {
         this.zombieClimbMul = freezeClimbMul;
         this.startTimedEffect({ dur, onEnd: () => { this.zombieClimbMul = 1; } });
       }
-    }, zombieCardPool);
+    }, zombieCardPool, this.sync);
 
     // UI（与第一阶段同款）
     this.settingsBtn = new Button({
@@ -226,7 +259,123 @@ export default class FruitVsZombieState extends BaseState {
     // （若流程里给本阶段配了后续阶段，则显示"下一阶段"直接晋级）
     this.debugBtn = this._makeDebugSkipButton();
 
+    g.runStats.markStage(this.stageId);
+
+    // 联机：接管报文；host 顺带把「切到僵尸阶段 + 场地描述」广播出去
+    this.sync.onEnter();
+    if (this.sync.isHost) this.sync.announceStage(this.carryScore);
+
     g.audio.startBgm('zombie');
+  }
+
+  /** 从结算层 pop 回来（看广告复活）：重新接管报文 */
+  onResume() {
+    this.sync.attach();
+  }
+
+  // ---------------- 联机同步钩子 ----------------
+
+  /** host 给某个投射口摇一个新水果等级 */
+  rollLauncherLevel() { return this._randFruitLevel(); }
+
+  /** 加分（按投放者归属到座位；单机全归 0 号位） */
+  _award(n, seat) {
+    if (!n) return;
+    const s = seat == null || seat < 0 ? this.mySeat : seat;
+    this.score += n;
+    this.seatScores[s] = (this.seatScores[s] || 0) + n;
+  }
+
+  _burst(e) {
+    this.effects.push(e);
+    this.sync.pushBurst(e);
+  }
+
+  _toast(text) {
+    showToast(text);
+    this.sync.pushToast(text);
+  }
+
+  onNetToast(text) {
+    showToast(text);
+  }
+
+  /**
+   * 阶段自有字段。墙血用 [wid, hp] 成对下发而不是按下标 ——
+   * 墙被打掉后数组会塌陷，按下标对齐会整体错位。
+   */
+  collectExtra() {
+    const wh = [];
+    for (const w of this.world.walls) {
+      if (!w.destructible || w.dead) continue;
+      wh.push(w.wid, Math.max(0, Math.round(w.hp)));
+    }
+    return {
+      hp: this.hp,
+      mh: this.maxHp,
+      ch: Math.max(0, Math.round(this.core ? this.core.hp : 0)),
+      cm: this.coreMaxHp,
+      kc: this.killCount,
+      lv: this.game.playerLevel,
+      el: Math.round(this.elapsed),
+      sc: this.stageCleared ? 1 : 0,
+      ct: Math.round((this.clearTimer || 0) * 10) / 10,
+      df: Math.round((this.damageFlash || 0) * 10) / 10,
+      ss: this.shotSlots,
+      wh
+    };
+  }
+
+  applyExtra(x) {
+    this.hp = x.hp | 0;
+    if (x.mh) this.maxHp = x.mh;
+    if (x.cm) this.coreMaxHp = x.cm;
+    this.killCount = x.kc | 0;
+    this.game.playerLevel = x.lv || 1;
+    this.elapsed = x.el || 0;
+    this.stageCleared = !!x.sc;
+    this.clearTimer = x.ct || 0;
+    this.damageFlash = x.df || 0;
+    this.shotSlots = x.ss || 1;
+    this._netCoreHp = x.ch | 0;
+    if (Array.isArray(x.wh)) this._applyWallHp(x.wh);
+  }
+
+  _applyWallHp(pairs) {
+    const alive = new Map();
+    for (let i = 0; i + 1 < pairs.length; i += 2) alive.set(pairs[i], pairs[i + 1]);
+    this.world.walls = this.world.walls.filter((w) => {
+      if (!w.destructible) return true;
+      if (!alive.has(w.wid)) return false; // host 那边已经打没了
+      w.hp = alive.get(w.wid);
+      return true;
+    });
+  }
+
+  /**
+   * guest 每帧同步完的收尾：快照里的刚体是纯数据对象，
+   * 这里把「尸核」和「神器」从里面挑出来接回 state 的字段上，
+   * 渲染与 HUD 代码就还能按单机那套写法读 this.core / this.artifacts。
+   */
+  afterGuestSync(view) {
+    this.artifacts = [];
+    let core = null;
+    for (const b of view.bodies) {
+      if (b.isArtifact) {
+        b.icon = this.artifactIcons.get(b.nid) || '★';
+        this.artifacts.push(b);
+      } else if (b.isCore) {
+        core = b;
+      }
+    }
+    if (core) {
+      core.hp = this._netCoreHp || 0;
+      core.maxHp = this.coreMaxHp;
+      this.core = core;
+    } else if (this.core) {
+      this.core.dead = true;
+      this.core.hp = 0;
+    }
   }
 
   // ---------------- 双线战场搭建 ----------------
@@ -238,7 +387,12 @@ export default class FruitVsZombieState extends BaseState {
    * 血墙：12 段横墙（4 行 × 3 段，血量按行取 wallHpRanges）+ 墙13（整宽 wall13Hp）。
    * 无血墙（不可摧毁）：格子间的 6 段竖隔板 + 左右半区之间的中隔墙。
    */
-  _buildArena() {
+  /**
+   * @param {object|null} desc 联机时 guest 会拿到 host 下发的场地描述，
+   *        按描述原样重建（墙血、神器卡、nid 全部一致），保证两边画的是同一张图；
+   *        为空则照旧随机生成（单机 / host）。
+   */
+  _buildArena(desc) {
     const T = wallThickness;
     const dividerX = this.dividerX;
     const colW = dividerX / 3;
@@ -251,6 +405,11 @@ export default class FruitVsZombieState extends BaseState {
     this.gridTop = gridTop;
     this.gridRowH = rowH;
     this.gridColW = colW;
+
+    if (desc) {
+      this._buildArenaFromDesc(desc);
+      return;
+    }
 
     // ---- 血墙：4 行 × 3 段（墙1~墙12，血量按行随机） ----
     for (let i = 0; i < 4; i++) {
@@ -294,19 +453,7 @@ export default class FruitVsZombieState extends BaseState {
     for (let i = 0; i < 3; i++) {
       for (let c = 0; c < 3; c++) {
         const cardId = zombieCardPool[Math.floor(Math.random() * zombieCardPool.length)];
-        const probe = CardSystem.createCard(cardId);
-        const a = new Body(
-          c * colW + colW / 2,
-          gridTop + i * rowH + rowH / 2,
-          ARTIFACT_RADIUS, 0, physicsDefaults
-        );
-        a.isStatic = true;
-        a.isArtifact = true;
-        a.cardId = cardId;
-        a.icon = probe ? probe.icon : '❓';
-        a.cardName = probe ? probe.name : '未知';
-        this.world.add(a);
-        this.artifacts.push(a);
+        this._addArtifact(c * colW + colW / 2, gridTop + i * rowH + rowH / 2, cardId);
       }
     }
 
@@ -314,10 +461,71 @@ export default class FruitVsZombieState extends BaseState {
     const core = new Body(dividerX / 2, this.floorY - coreRadius - 8, coreRadius, 0, physicsDefaults);
     core.isStatic = true;
     core.isCore = true;
-    core.hp = coreMaxHp;
-    core.maxHp = coreMaxHp;
+    core.hp = this.coreMaxHp;
+    core.maxHp = this.coreMaxHp;
     this.world.add(core);
     this.core = core;
+  }
+
+  _addArtifact(x, y, cardId) {
+    const probe = CardSystem.createCard(cardId);
+    const a = new Body(x, y, ARTIFACT_RADIUS, 0, physicsDefaults);
+    a.isStatic = true;
+    a.isArtifact = true;
+    a.cardId = cardId;
+    a.icon = probe ? probe.icon : '❓';
+    a.cardName = probe ? probe.name : '未知';
+    this.world.add(a);
+    this.artifacts.push(a);
+    this.artifactIcons.set(a.nid, a.icon);
+    return a;
+  }
+
+  /** guest：按 host 下发的描述重建场地（几何、墙血、神器卡、nid 全对齐） */
+  _buildArenaFromDesc(desc) {
+    for (const w of desc.w || []) {
+      const wall = {
+        wid: w[0], id: w[1] || undefined,
+        x: w[2], y: w[3], w: w[4], h: w[5],
+        destructible: !!w[6], hp: w[7], maxHp: w[8]
+      };
+      this.world.walls.push(wall);
+    }
+    for (const a of desc.a || []) {
+      const body = this._addArtifact(a[1], a[2], a[3]);
+      body.nid = a[0];
+      this.artifactIcons.set(a[0], body.icon);
+    }
+    const c = desc.c || [];
+    const core = new Body(c[1] || this.dividerX / 2, c[2] || this.floorY - coreRadius, c[3] || coreRadius, 0, physicsDefaults);
+    core.isStatic = true;
+    core.isCore = true;
+    core.nid = c[0] || 0;
+    core.maxHp = c[4] || this.coreMaxHp;
+    core.hp = core.maxHp;
+    this.coreMaxHp = core.maxHp;
+    this.world.bodies.push(core);
+    this.core = core;
+  }
+
+  /** host：把当前场地导出成描述，随 STAGE 报文发给所有人 */
+  buildArenaDesc() {
+    return {
+      dv: Math.round(this.dividerX),
+      w: this.world.walls.map((w) => [
+        w.wid, w.id || 0,
+        Math.round(w.x), Math.round(w.y), Math.round(w.w), Math.round(w.h),
+        w.destructible ? 1 : 0, Math.round(w.hp || 0), Math.round(w.maxHp || 0)
+      ]),
+      a: this.artifacts.map((a) => [a.nid, Math.round(a.x), Math.round(a.y), a.cardId]),
+      c: this.core
+        ? [this.core.nid, Math.round(this.core.x), Math.round(this.core.y), Math.round(this.core.r), this.core.maxHp]
+        : []
+    };
+  }
+
+  applyArenaDesc(desc) {
+    this._buildArenaFromDesc(desc);
   }
 
   /** 调试跳段按钮：有下一阶段 → 直接晋级；已是最终关 → 直接进结算 */
@@ -343,6 +551,7 @@ export default class FruitVsZombieState extends BaseState {
   onExit() {
     // 清 Toast：防止"升级 / 砸墙"等提示残留到下一阶段（或大厅）
     clearToasts();
+    this.sync.onExit();
     this.game.audio.stopBgm();
   }
 
@@ -372,22 +581,37 @@ export default class FruitVsZombieState extends BaseState {
    */
   _dropCurrent() {
     if (!this.current || this.cardSystem.active) return;
-    const g = this.game;
-    const W = g.screenW;
-    const lvl = this.current.level;
-    const r = this.current.r;
+    if (this.sync.isGuest) {
+      // guest 不生成刚体：把投放请求发给 host，本地先收起球（即时反馈）
+      this.sync.guestSendInput(0, this.current.x, true);
+      this.current = null;
+      return;
+    }
+    this.spawnDrop(this.current.x, this.current.level, this.mySeat);
+    this.current = null;
+    this.spawnDelay = 0.35;
+  }
+
+  /**
+   * 真正投放（host / 单机）：多重射击时并排发射 shotSlots 颗同等级水果
+   * （间隔 > 2r 保证初始不重叠；mergeLock 防止下落途中贴住互合）。
+   * @param {number} seat 投放者座位 —— 这批水果之后打出的分都算他的
+   */
+  spawnDrop(x, level, seat) {
+    const W = this.game.screenW;
+    const r = levels[level].radius;
     const n = this.shotSlots;
     const spacing = r * 2 + 16;
-    const cx = this.current.x;
     for (let k = 0; k < n; k++) {
-      const x = clamp(cx + (k - (n - 1) / 2) * spacing, r, W - r);
-      const b = new Body(x, this.dropY, r, lvl, physicsDefaults);
+      const bx = clamp(x + (k - (n - 1) / 2) * spacing, r, W - r);
+      const b = new Body(bx, this.dropY, r, level, physicsDefaults);
       b.mergeLock = 0.6;
+      b.owner = seat;
       this.world.add(b);
     }
-    this.current = null;
     this.dropped = true;
-    this.spawnDelay = 0.35;
+    // 多重射击一次打出 n 颗，统计上就算 n 次投放
+    this.game.runStats.add(seat, 'drops', n);
   }
 
   // ---------------- 僵尸 ----------------
@@ -405,9 +629,22 @@ export default class FruitVsZombieState extends BaseState {
     return Math.min(zombieMaxLevelCap, zombieMaxLevelStart + Math.floor(this.elapsed / zombieMaxLevelGrowEvery));
   }
 
-  /** 当前每波出怪数量：随时间 zombieWaveStart → zombieWaveMax 递增（PVZ 式压力曲线） */
+  /**
+   * 当前每波出怪数量：随时间 zombieWaveStart → zombieWaveMax 递增（PVZ 式压力曲线），
+   * 联机时再按人数放大（waveScale，单人恒为 1）。
+   */
   _spawnWaveCount() {
-    return Math.min(zombieWaveMax, zombieWaveStart + Math.floor(this.elapsed / zombieWaveGrowEvery));
+    const base = Math.min(zombieWaveMax, zombieWaveStart + Math.floor(this.elapsed / zombieWaveGrowEvery));
+    return Math.max(1, Math.round(base * this.waveScale));
+  }
+
+  /** 场上还活着的僵尸数（出怪与孵化都受 maxZombiesOnField 限制） */
+  _zombieCount() {
+    let n = 0;
+    for (const b of this.world.bodies) {
+      if (b.isZombie && !b.dead) n++;
+    }
+    return n;
   }
 
   /** 右半区可用的生成 x 范围（中隔墙右侧 → 屏幕右边） */
@@ -452,10 +689,16 @@ export default class FruitVsZombieState extends BaseState {
         this._addZombie(x0 + i * spacing, this.floorY - r - j * spacing, r, lvl);
       }
     }
-    showToast(`⚠ 方阵僵尸来袭（${cols}×${rows}）！`);
+    this._toast(`⚠ 方阵僵尸来袭（${cols}×${rows}）！`);
   }
 
+  /**
+   * 出怪。联机把出怪量按人数放大后，尸核孵化 + 方阵叠加可能瞬间刷出上百只，
+   * 既拖慢 host 物理也会把快照撑破 8KB —— 到达 maxZombiesOnField 就不再刷，
+   * 玩家清完场自然恢复。
+   */
   _addZombie(x, y, r, lvl) {
+    if (this._zombieCount() >= maxZombiesOnField) return null;
     const z = new Body(x, y, r, lvl, physicsDefaults);
     z.isZombie = true;
     z.climbAccel = effectiveClimbAccel(this.zombieClimbMul);
@@ -463,12 +706,17 @@ export default class FruitVsZombieState extends BaseState {
     return z;
   }
 
-  /** 消灭僵尸：得分 + 特效 + 击杀计数（驱动抽卡） */
-  _destroyZombie(z, scoreGain) {
-    this.effects.push({ x: z.x, y: z.y, r: z.r, t: 0, dur: 0.35, color: '#5d8a35' });
+  /**
+   * 消灭僵尸：得分 + 特效 + 击杀计数（驱动抽卡）
+   * @param {number} [seat] 击杀者座位（水果的投放者）
+   */
+  _destroyZombie(z, scoreGain, seat) {
+    this._burst({ x: z.x, y: z.y, r: z.r, t: 0, dur: 0.35, color: '#5d8a35' });
     this.world.remove(z);
-    if (scoreGain) this.score += scoreGain;
+    if (scoreGain) this._award(scoreGain, seat);
+    this.game.runStats.add(seat, 'kills', 1);
     this.game.audio.play('boom');
+    // 联机时击杀数是**全队**共享的，抽卡也是全队一起抽
     this.killCount++;
     const need = getCardTriggerCount('fruitVsZombie', this.game.playerLevel);
     if (this.killCount >= need) {
@@ -476,12 +724,12 @@ export default class FruitVsZombieState extends BaseState {
       this.game.playerLevel++;
       this.levelUpFlash = 0.9;
       this.cardSystem.trigger();
-      showToast(`Lv.${this.game.playerLevel}！`);
+      this._toast(`Lv.${this.game.playerLevel}！`);
     }
   }
 
   _destroyFruit(b) {
-    this.effects.push({ x: b.x, y: b.y, r: b.r, t: 0, dur: 0.3, color: '#ffffff' });
+    this._burst({ x: b.x, y: b.y, r: b.r, t: 0, dur: 0.3, color: '#ffffff' });
     this.world.remove(b);
   }
 
@@ -508,12 +756,12 @@ export default class FruitVsZombieState extends BaseState {
     const dmg = Math.round(b.r * fruitWallDamageMul);
     if (wall.destructible) {
       wall.hp -= dmg;
-      this.effects.push({ x: b.x, y: b.y, r: b.r, t: 0, dur: 0.3, color: '#c9a227' });
+      this._burst({ x: b.x, y: b.y, r: b.r, t: 0, dur: 0.3, color: '#c9a227' });
       if (wall.hp <= 0) {
         wall.hp = 0;
         this.world.removeWall(wall);
         this.game.audio.play('boom');
-        showToast(wall.id ? `墙${wall.id} 被摧毁！` : '墙被摧毁！');
+        this._toast(wall.id ? `墙${wall.id} 被摧毁！` : '墙被摧毁！');
       }
     }
     this._destroyFruit(b);
@@ -522,7 +770,7 @@ export default class FruitVsZombieState extends BaseState {
   /** 最低级水果（葡萄）撞竖直墙：只弹开，保留在场上不掉血不自毁 */
   _bounceFruitOnWall(b, wall) {
     // 物理引擎已经把球推出墙体并反弹了速度，这里只补一个轻量火花特效。
-    this.effects.push({ x: b.x, y: b.y, r: b.r * 0.6, t: 0, dur: 0.18, color: '#cfd8dc' });
+    this._burst({ x: b.x, y: b.y, r: b.r * 0.6, t: 0, dur: 0.18, color: '#cfd8dc' });
   }
 
   /**
@@ -549,7 +797,7 @@ export default class FruitVsZombieState extends BaseState {
     const gapY = cr * wallSplitStackGap;
     const px = fruit.x;
     const py = fruit.y;
-    this.effects.push({ x: px, y: py, r: fruit.r, t: 0, dur: 0.35, color: '#ffd54f' });
+    this._burst({ x: px, y: py, r: fruit.r, t: 0, dur: 0.35, color: '#ffd54f' });
 
     // 同侧的小水果共用同一条竖直线（无水平初速度）：格子净宽只够放下一颗，
     // 若各自随机偏移 / 初速，空中就会互相挤压并被推向隔板 → 反复撞死。
@@ -565,6 +813,7 @@ export default class FruitVsZombieState extends BaseState {
       child.noMerge = true;                   // 分裂产物不允许再次合成
       child.mergeLock = 0.2;
       child.vy = -wallSplitLift;              // 小幅上抛，视觉上"炸开"
+      child.owner = fruit.owner;              // 碎片打出的分仍归原投放者
       this.world.add(child);
     }
 
@@ -580,19 +829,19 @@ export default class FruitVsZombieState extends BaseState {
     if (fruit.dead) return;
     // ---- 神器：获得耦合卡牌的增益，神器与水果都消失 ----
     if (stat.isArtifact) {
-      const card = this.cardSystem.grantCard(stat.cardId);
-      this.effects.push({ x: stat.x, y: stat.y, r: stat.r, t: 0, dur: 0.45, color: '#f5c542' });
+      const card = this.cardSystem.grantCard(stat.cardId, fruit.owner);
+      this._burst({ x: stat.x, y: stat.y, r: stat.r, t: 0, dur: 0.45, color: '#f5c542' });
       this.world.remove(stat);
       this.artifacts = this.artifacts.filter(a => a !== stat);
       this._destroyFruit(fruit);
-      showToast(`拾取神器：${card ? card.name : stat.cardName}！`);
+      this._toast(`拾取神器：${card ? card.name : stat.cardName}！`);
       return;
     }
     // ---- 尸核：掉血 + 按伤害孵化小僵尸 + 水果被摧毁 ----
     if (stat.isCore) {
       const dmg = Math.round(fruit.r * fruitWallDamageMul);
       stat.hp -= dmg;
-      this.effects.push({ x: fruit.x, y: fruit.y, r: fruit.r, t: 0, dur: 0.35, color: '#ff2d55' });
+      this._burst({ x: fruit.x, y: fruit.y, r: fruit.r, t: 0, dur: 0.35, color: '#ff2d55' });
       this._spawnCoreZombies(dmg, fruit.x, fruit.y);
       this._destroyFruit(fruit);
       this.game.audio.play('boom');
@@ -610,6 +859,8 @@ export default class FruitVsZombieState extends BaseState {
   _spawnCoreZombies(dmg, x, y) {
     const count = Math.max(1, Math.round(dmg / coreZombieHp));
     for (let i = 0; i < count; i++) {
+      // 同屏僵尸到达上限就不再孵化（联机放大后这里最容易失控）
+      if (this._zombieCount() >= maxZombiesOnField) return;
       const zb = new Body(
         x + (Math.random() * 2 - 1) * 40,
         y + (Math.random() * 2 - 1) * 40,
@@ -623,12 +874,12 @@ export default class FruitVsZombieState extends BaseState {
 
   /** 尸核被摧毁 → 通关：停止出怪 + 横幅倒计时 → 线性流程收尾 */
   _onCoreDestroyed() {
-    this.effects.push({ x: this.core.x, y: this.core.y, r: this.core.r * 1.6, t: 0, dur: 0.6, color: '#ff2d55' });
+    this._burst({ x: this.core.x, y: this.core.y, r: this.core.r * 1.6, t: 0, dur: 0.6, color: '#ff2d55' });
     this.world.remove(this.core);
     this.stageCleared = true;
     this.clearTimer = FINAL_CLEAR_DELAY;
     this.game.audio.play('boom');
-    showToast('🎉 尸核被摧毁！');
+    this._toast('🎉 尸核被摧毁！');
   }
 
   // ---------------- 水果 ↔ 僵尸 碰撞结算 ----------------
@@ -665,8 +916,8 @@ export default class FruitVsZombieState extends BaseState {
     const cy = (fruit.y + zombie.y) / 2;
 
     if (fr >= zr) {
-      // ---- 僵尸被砸死 ----
-      this._destroyZombie(zombie, levels[zombie.level].score * zombieScoreMul);
+      // ---- 僵尸被砸死 ----（击杀分归这颗水果的投放者）
+      this._destroyZombie(zombie, levels[zombie.level].score * zombieScoreMul, fruit.owner);
       // 幸存水果：向上弹起 + 随机左右扰动
       const jx = (Math.random() * 2 - 1) * survivorJitter;
       fruit.vy = -fruitBounceSpeed;
@@ -688,6 +939,7 @@ export default class FruitVsZombieState extends BaseState {
         child.mergeLock = 0.15;
         child.vy = fruit.vy;  // 垂直方向相同
         child.vx = -fruit.vx; // 水平方向相反、大小相等
+        child.owner = fruit.owner;
         this.world.add(child);
       }
     } else {
@@ -699,7 +951,7 @@ export default class FruitVsZombieState extends BaseState {
       zombie.sleeping = false;
       const newR = zr - fr;
       if (newR < minSurviveRadius) {
-        this._destroyZombie(zombie, levels[zombie.level].score * zombieScoreMul);
+        this._destroyZombie(zombie, levels[zombie.level].score * zombieScoreMul, fruit.owner);
       } else {
         this.world.resize(zombie, newR);
       }
@@ -710,10 +962,13 @@ export default class FruitVsZombieState extends BaseState {
 
   _handleMerge(a, b) {
     const g = this.game;
+    // 合成收益归属：谁投的水果参与了合成就算谁的
+    const owner = a.owner != null ? a.owner : b.owner;
+    recordMerge(g, owner, Math.min(a.level + 1, levels.length - 1));
     if (a.level >= levels.length - 1) {
-      this._destroy(a, levels[a.level].score);
-      this._destroy(b, levels[b.level].score);
-      showToast('合成终极水果！');
+      this._destroy(a, levels[a.level].score, owner);
+      this._destroy(b, levels[b.level].score, owner);
+      this._toast('合成终极水果！');
       return;
     }
     const newLevel = a.level + 1;
@@ -724,14 +979,15 @@ export default class FruitVsZombieState extends BaseState {
     this._destroy(b, 0);
     const nb = this.world.add(new Body(x, y, cfg.radius, newLevel, physicsDefaults));
     nb.mergeLock = 0.12;
-    this.score += cfg.score;
+    nb.owner = owner;
+    this._award(cfg.score, owner);
     g.audio.play('boom');
-    this.effects.push({ x, y, r: cfg.radius, t: 0, dur: 0.35, color: cfg.color });
+    this._burst({ x, y, r: cfg.radius, t: 0, dur: 0.35, color: cfg.color });
   }
 
-  _destroy(body, scoreGain) {
+  _destroy(body, scoreGain, seat) {
     this.world.remove(body);
-    if (scoreGain) this.score += scoreGain;
+    if (scoreGain) this._award(scoreGain, seat == null ? body.owner : seat);
   }
 
   // ---------------- 卡牌定时效果 ----------------
@@ -767,14 +1023,14 @@ export default class FruitVsZombieState extends BaseState {
     // （只统计未死亡的僵尸体——remove 只打标记，数组在下次 step 才清理）
     const zombies = this.world.bodies.filter(b => b.isZombie && !b.dead);
     for (const z of pickHalf(zombies)) {
-      this.effects.push({ x: z.x, y: z.y, r: z.r, t: 0, dur: 0.3, color: '#ffffff' });
+      this._burst({ x: z.x, y: z.y, r: z.r, t: 0, dur: 0.3, color: '#ffffff' });
       this.world.remove(z);
     }
-    this.hp = playerMaxHP;
+    this.hp = this.maxHp;
     this.damageFlash = 0;
     this.dead = false;
     this.killCount = 0;
-    this.coreHpShown = this.core.hp;
+    this.coreHpShown = this.core ? this.core.hp : 0;
     this.timedEffects = [];
     this.zombieClimbMul = 1;
     this.spawnTimer = Math.max(this.spawnTimer, FIRST_SPAWN_DELAY);
@@ -783,7 +1039,18 @@ export default class FruitVsZombieState extends BaseState {
       this.spawnNew();
     }
     this.game.audio.startBgm('zombie');
-    showToast('复活成功！血量回满，僵尸被驱散一半');
+    this._toast('复活成功！血量回满，僵尸被驱散一半');
+  }
+
+  /**
+   * guest 收到「有人复活了全队」：把自己叠在上面的结算层弹掉，回到战场。
+   * 世界状态本身由 host 的快照带回来，这里不动物理。
+   */
+  onNetRevived(data) {
+    this.dead = false;
+    this.game.audio.startBgm('zombie');
+    if (this.game.states.current !== this) this.game.states.pop();
+    showToast(`${this.sync.nameOf(data.seat)} 复活了全队！`);
   }
 
   // ---------------- 更新 ----------------
@@ -795,10 +1062,21 @@ export default class FruitVsZombieState extends BaseState {
     this.fruitMaxLevel = Math.min(fruitMaxLevelCap, fruitMaxLevelStart + Math.floor(this.elapsed / fruitGrowEvery));
 
     // 尸核血条显示值缓动
-    this.coreHpShown += (this.core.hp - this.coreHpShown) * Math.min(1, dt * 6);
+    this.coreHpShown += ((this.core ? this.core.hp : 0) - this.coreHpShown) * Math.min(1, dt * 6);
     if (this.levelUpFlash > 0) this.levelUpFlash = Math.max(0, this.levelUpFlash - dt);
+    // 选卡投票倒计时必须在暂停期间照常推进
+    this.cardSystem.tick(dt);
 
-    if (this.cardSystem.active) return; // 选卡时暂停
+    // guest：不跑物理，只做「插值渲染 + 本地投射口 + 上报输入」
+    if (this.sync.isGuest) {
+      this._guestUpdate(dt);
+      return;
+    }
+
+    if (this.cardSystem.active) {
+      this.sync.hostTick(dt); // 暂停期间照常发快照，保证 guest 世界不漂
+      return;
+    }
 
     // 特效动画 & 卡牌定时效果
     for (const e of this.effects) e.t += dt;
@@ -823,12 +1101,15 @@ export default class FruitVsZombieState extends BaseState {
     if (!this.stageCleared) {
       this.spawnTimer -= dt;
       if (this.spawnTimer <= 0) {
-        if (Math.random() < phalanxChance) {
-          this._spawnPhalanx();
-        } else {
-          const wave = this._spawnWaveCount();
-          for (let i = 0; i < wave; i++) this._spawnZombie();
-        }
+      if (Math.random() < phalanxChance) {
+        this._spawnPhalanx();
+      } else {
+        const wave = this._spawnWaveCount();
+        for (let i = 0; i < wave; i++) this._spawnZombie();
+      }
+      // 「撑到第几波」= 已经刷出去的波数，波越多说明活得越久
+      this.waveIndex = (this.waveIndex || 0) + 1;
+      this.game.runStats.bumpWave(this.waveIndex);
         this.spawnTimer = this._spawnInterval();
       }
     }
@@ -844,6 +1125,9 @@ export default class FruitVsZombieState extends BaseState {
       if (this.spawnDelay <= 0) this.spawnNew();
     }
 
+    // 其他玩家的投射口（冷却推进 + 落实他们的投放请求）
+    this.sync.hostUpdateLaunchers(dt);
+
     // 选卡队列
     this.cardSystem.update();
 
@@ -853,11 +1137,13 @@ export default class FruitVsZombieState extends BaseState {
         if (!b.isZombie || b.dead) continue;
         if (b.y - b.r < this.warnY) {
           const dmg = b.level + zombieDamageBase;
-          this.effects.push({ x: b.x, y: b.y, r: b.r, t: 0, dur: 0.35, color: '#ff3b30' });
+          this._burst({ x: b.x, y: b.y, r: b.r, t: 0, dur: 0.35, color: '#ff3b30' });
           this.world.remove(b);
           this.hp -= dmg;
+          // 掉血是全队共享的，「铜墙铁壁」靠这一格判定
+          this.game.runStats.hpLost += dmg;
           this.damageFlash = 0.6;
-          showToast(`僵尸越线！-${dmg} 血`);
+          this._toast(`僵尸越线！-${dmg} 血`);
           if (this.hp <= 0) {
             this.hp = 0;
             this.dead = true;
@@ -874,8 +1160,41 @@ export default class FruitVsZombieState extends BaseState {
       if (this.clearTimer <= 0) {
         this.clearTimer = 0;
         this._finishStage();
+        return;
       }
     }
+
+    this.sync.hostTick(dt);
+  }
+
+  /** guest 的每帧：世界完全由 host 下发（详见 fruitMergeState 的同名方法） */
+  _guestUpdate(dt) {
+    for (const e of this.effects) e.t += dt;
+    this.effects = this.effects.filter((e) => e.t < e.dur);
+    this.fruitMaxLevel = Math.min(fruitMaxLevelCap, fruitMaxLevelStart + Math.floor(this.elapsed / fruitGrowEvery));
+    this.sync.guestSync();
+    this._guestLauncher(dt);
+  }
+
+  _guestLauncher(dt) {
+    const W = this.game.screenW;
+    const mine = this.sync.mine;
+    this.nextLevel = mine.next | 0;
+    if (!mine.ready) {
+      this.current = null;
+    } else {
+      if (!this.current || this.current.level !== mine.level) {
+        const r = levels[mine.level].radius;
+        this.current = new Body(
+          clamp(this.touchX ?? W / 2, r, W - r), this.dropY, r, mine.level, physicsDefaults
+        );
+      }
+      const r = this.current.r;
+      const target = clamp(this.touchX ?? this.current.x, r, W - r);
+      this.current.x += (target - this.current.x) * Math.min(1, dt * 18);
+      this.current.y = this.dropY;
+    }
+    this.sync.guestSendInput(dt, this.current ? this.current.x : (this.touchX ?? W / 2), false);
   }
 
   /** 阶段收尾：走线性关卡流程（有下一关切换过去；已是最终关 → 通关结算） */
@@ -885,17 +1204,20 @@ export default class FruitVsZombieState extends BaseState {
       g.bestScore = this.score;
       g.saveBest();
     }
-    const next = g.createNextStageState(this.stageId, this.score);
+    const next = g.createNextStageState(this.stageId, this.score, {
+      seatScores: this.seatScores,
+      sync: this.sync
+    });
     if (next) {
+      if (this.sync.isHost) this.sync.announceNextStage(next);
       g.states.switchTo(next);
     } else {
       // 线性流程的最终阶段：直接进入结算（通关模式，不提供复活）
-      g.audio.stopBgm();
-      g.states.push(g.createResultState(this, { win: true }));
+      this._gotoResult({ win: true });
     }
   }
 
-  /** 死亡 → 压入结算层（记录最佳分数） */
+  /** 死亡 / 通关 → 压入结算层（记录最佳分数；联机时由 host 广播结果） */
   _gotoResult(opts) {
     const g = this.game;
     if (this.score > g.bestScore) {
@@ -903,7 +1225,23 @@ export default class FruitVsZombieState extends BaseState {
       g.saveBest();
     }
     g.audio.stopBgm();
-    g.states.push(g.createResultState(this, opts));
+    const rows = this.sync.scoreRows(this.seatScores);
+    if (this.sync.isHost) this.sync.announceResult(opts, rows);
+    g.states.push(g.createResultState(this, { ...opts, rows }));
+  }
+
+  /** guest 收到 host 的结算广播 */
+  onNetResult(data) {
+    const g = this.game;
+    this.dead = !data.w;
+    if (this.score > g.bestScore) {
+      g.bestScore = this.score;
+      g.saveBest();
+    }
+    g.audio.stopBgm();
+    // 击杀 / 合成 / 投放只在 host 那边记过账，用它下发的表覆盖本地
+    g.runStats.decode(data.rs);
+    g.states.push(g.createResultState(this, { win: !!data.w, rows: data.rows || [] }));
   }
 
   // ---------------- 渲染 ----------------
@@ -962,6 +1300,9 @@ export default class FruitVsZombieState extends BaseState {
     if (this.current) {
       drawDropGuide(ctx, this.current.x, this.current.y, this.current.r, this.floorY, 'rgba(180,255,140,0.35)');
       drawBall(ctx, this.current.x, this.current.y, this.current.r, this.current.level);
+      if (this.sync.online) {
+        drawSelfLauncherRing(ctx, this.current.x, this.current.y, this.current.r, this.sync.mySeat);
+      }
     }
 
     for (const e of this.effects) drawPixelBurst(ctx, e);
@@ -980,11 +1321,12 @@ export default class FruitVsZombieState extends BaseState {
       );
       const hy = pos.by + pos.bh + 12;
       const hh = 40;
-      pixelBar(ctx, pos.bx, hy, pos.bw, hh, this.hp / playerMaxHP, palette.hp, 'rgba(20,16,28,0.55)');
+      pixelBar(ctx, pos.bx, hy, pos.bw, hh, this.hp / this.maxHp, palette.hp, 'rgba(20,16,28,0.55)');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#4a0f0f';
-      fillPixelText(ctx, `血量 ${this.hp}/${playerMaxHP}`, pos.bx + pos.bw / 2, hy + hh / 2, 24);
+      const hpLabel = this.sync.online ? '全队血量' : '血量';
+      fillPixelText(ctx, `${hpLabel} ${this.hp}/${this.maxHp}`, pos.bx + pos.bw / 2, hy + hh / 2, 24);
     }
 
     this._renderPlayerLevelBadge(ctx);
@@ -1006,6 +1348,7 @@ export default class FruitVsZombieState extends BaseState {
       drawBanner(ctx, W, H, '恭喜通关！', tip, '#8ee66f');
     }
 
+    this._renderNetHud(ctx, W);
     this.adBtn.render(ctx);
     this.payBtn.render(ctx);
     this.settingsBtn.render(ctx);
@@ -1013,6 +1356,24 @@ export default class FruitVsZombieState extends BaseState {
     this.settings.render(ctx);
     this.cardSystem.render(ctx);
     g.payModal.render(ctx);
+  }
+
+  /**
+   * 联机 HUD：其他玩家的投射口 + 全队计分板（表头带房间号 / 断线告警）。
+   * 必须在分数圈 / 下一个 / 抽卡进度之后画 —— 那几块 HUD 是不透明的，
+   * 先画投射口会被它们盖掉（投放线 dropY 正好穿过它们）。
+   */
+  _renderNetHud(ctx, W) {
+    if (!this.sync.online) return;
+    for (const L of this.sync.remoteViews()) {
+      drawRemoteLauncher(ctx, L, this.dropY, this.floorY, this.sync.nameOf(L.seat), W);
+    }
+    drawTeamPanel(
+      ctx, W,
+      this.sync.scoreRows(this.seatScores),
+      this.sync.statusText(),
+      this.sync.warning
+    );
   }
 
   /** 尸核血条填充宽度（纯计算，便于测试） */

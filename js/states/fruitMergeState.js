@@ -21,7 +21,11 @@ import { getCardTriggerCount } from '../config/level.js';
 import { drawBall } from '../ui/ballRenderer.js';
 import { applyPixelCtx, drawPixelBurst, palette } from '../ui/pixel.js';
 import { drawStageBg, drawWarnLine, drawDropGuide, drawScoreChip, drawNextChip, drawLevelBadge, drawCardProgress, drawTopBar, drawBanner } from '../ui/hud.js';
+import { drawRemoteLauncher, drawSelfLauncherRing, drawTeamPanel } from '../ui/netHud.js';
 import { weightedLevelIndex, clamp, pickHalfExcludingMax } from '../core/utils.js';
+import { StageSync } from '../net/stageSync.js';
+import { recordMerge } from '../core/runStats.js';
+import { teamGoalScale, MAX_PLAYERS } from '../config/net.js';
 
 /**
  * 越线判定：球被判定为"弹道飞行"的速度阈值（px/s）。
@@ -47,6 +51,19 @@ export default class FruitMergeState extends BaseState {
     g.resetPlayerLevel();
     this.score = 0;
     this.dead = false;
+
+    // ---- 联机（单机时 sync.online 恒为 false，下面所有分支自动短路）----
+    this.sync = new StageSync(this, this.stageId);
+    this.mySeat = this.sync.mySeat;
+    /** 每个座位的实时得分（单机只有 0 号位）；this.score 是全队合计 */
+    this.seatScores = new Array(MAX_PLAYERS).fill(0);
+    const pending = g.net && g.net.pendingStage;
+    if (this.sync.isGuest && pending && pending.id === this.stageId) {
+      this.seatScores = pending.seatScores.slice();
+      g.net.pendingStage = null;
+    }
+    /** 阶段目标分：联机时按人数放大，保证人均投入与单机一致 */
+    this.goal = Math.round(stageScoreGoal * teamGoalScale(this.sync.playerCount));
 
     // 场地：左右墙 + 地面，警戒线
     this.floorY = H - 20;
@@ -91,9 +108,10 @@ export default class FruitMergeState extends BaseState {
       getBodies: () => this.world.bodies.slice(),
       removeBody: (b) => this.world.remove(b),
       resizeBody: (b, r) => this.world.resize(b, r),
-      addScore: (n) => { this.score += n; },
-      addEffect: (e) => this.effects.push(e),
-      toast: showToast,
+      // 卡牌得分归属选出这张卡的玩家（applyingSeat 由 CardSystem 在结算时设置）
+      addScore: (n) => this._award(n, this.cardSystem.applyingSeat),
+      addEffect: (e) => this._burst(e),
+      toast: (text) => this._toast(text),
       playSound: (name) => g.audio.play(name),
       forceDrops: (levelIndex, count) => {
         for (let i = 0; i < count; i++) this.forcedQueue.push(levelIndex);
@@ -118,7 +136,7 @@ export default class FruitMergeState extends BaseState {
         }
         this.world.wakeAll();
       }
-    });
+    }, null, this.sync);
 
     // UI
     this.settingsBtn = new Button({
@@ -145,7 +163,75 @@ export default class FruitMergeState extends BaseState {
     // 正式包（envVersion === 'release'）不创建、不渲染、不响应触摸。
     this.debugBtn = this._makeDebugSkipButton();
 
+    g.runStats.markStage(this.stageId);
+
+    // 联机：接管报文；host 顺带通知全房间切到本阶段（附带继承分数）
+    this.sync.onEnter();
+    if (this.sync.isHost) this.sync.announceStage(0);
+
     g.audio.startBgm('merge');
+  }
+
+  /** 从结算层 pop 回来（看广告复活）：重新接管报文 */
+  onResume() {
+    this.sync.attach();
+  }
+
+  // ---------------- 联机同步钩子 ----------------
+
+  /** 本阶段没有场地结构，guest 不需要额外描述 */
+  buildArenaDesc() { return null; }
+  applyArenaDesc() {}
+
+  /** host 给某个投射口摇一个新水果等级 */
+  rollLauncherLevel() { return this._randLevel(); }
+
+  /** 阶段自有字段：guest 的 HUD 全靠它 */
+  collectExtra() {
+    return {
+      vt: Math.round((this.violationTimer || 0) * 100) / 100,
+      mc: this.mergeCount,
+      lv: this.game.playerLevel,
+      pr: this.promoted ? 1 : 0,
+      pt: Math.round((this.promoteTimer || 0) * 10) / 10,
+      dr: this.dropped ? 1 : 0,
+      gl: this.goal
+    };
+  }
+
+  applyExtra(x) {
+    this.violationTimer = x.vt || 0;
+    this.mergeCount = x.mc || 0;
+    this.game.playerLevel = x.lv || 1;
+    this.promoted = !!x.pr;
+    this.promoteTimer = x.pt || 0;
+    this.dropped = !!x.dr;
+    if (x.gl) this.goal = x.gl;
+  }
+
+  /** 加分（联机时按投放者归属到座位） */
+  _award(n, seat) {
+    if (!n) return;
+    const s = seat == null || seat < 0 ? this.mySeat : seat;
+    this.score += n;
+    this.seatScores[s] = (this.seatScores[s] || 0) + n;
+  }
+
+  /** 播一个爆点特效，联机时同步给其他人 */
+  _burst(e) {
+    this.effects.push(e);
+    this.sync.pushBurst(e);
+  }
+
+  /** 弹一条提示，联机时同步给其他人 */
+  _toast(text) {
+    showToast(text);
+    this.sync.pushToast(text);
+  }
+
+  /** guest 收到 host 同步过来的提示 */
+  onNetToast(text) {
+    showToast(text);
   }
 
   /** 调试跳段按钮：有下一阶段 → 直接晋级；已是最终关 → 直接进结算 */
@@ -178,6 +264,7 @@ export default class FruitMergeState extends BaseState {
   onExit() {
     // 清 Toast：防止"升级 / 合成终极水果"等提示残留到下一阶段（或大厅）
     clearToasts();
+    this.sync.onExit();
     this.game.audio.stopBgm();
   }
 
@@ -207,22 +294,50 @@ export default class FruitMergeState extends BaseState {
 
   _dropCurrent() {
     if (!this.current || this.cardSystem.active) return;
-    this.world.add(this.current);
+    if (this.sync.isGuest) {
+      // guest 不生成刚体：把投放请求发给 host，本地先把球收起来（即时反馈），
+      // 真正的水果会随下一帧快照出现。
+      this.sync.guestSendInput(0, this.current.x, true);
+      this.current = null;
+      return;
+    }
+    this.spawnDrop(this.current.x, this.current.level, this.mySeat);
     this.current = null;
-    this.dropped = true;
     // 延迟生成下一个，给物理一点结算时间
     this.spawnDelay = 0.35;
+  }
+
+  /**
+   * 真正把水果放进世界（host / 单机）。
+   * @param {number} x 投放横坐标
+   * @param {number} level 水果等级
+   * @param {number} seat 投放者座位（决定这颗水果之后打出的分算谁的）
+   */
+  spawnDrop(x, level, seat) {
+    const r = levels[level].radius;
+    const b = new Body(
+      clamp(x, r, this.game.screenW - r),
+      this.dropY, r, level, physicsDefaults
+    );
+    b.owner = seat;
+    this.world.add(b);
+    this.dropped = true;
+    this.game.runStats.add(seat, 'drops', 1);
+    return b;
   }
 
   // ---------------- 合成 ----------------
 
   _handleMerge(a, b) {
     const g = this.game;
+    // 合成收益归属：谁投的水果参与了合成就算谁的（两颗都有主时取先手那颗）
+    const owner = a.owner != null ? a.owner : b.owner;
+    recordMerge(this.game, owner, Math.min(a.level + 1, levels.length - 1));
     if (a.level >= levels.length - 1) {
       // 终极球合成：直接消除并给分（两个大西瓜消失）
-      this._destroy(a, levels[a.level].score);
-      this._destroy(b, levels[b.level].score);
-      showToast('合成终极水果！');
+      this._destroy(a, levels[a.level].score, owner);
+      this._destroy(b, levels[b.level].score, owner);
+      this._toast('合成终极水果！');
       return;
     }
     const newLevel = a.level + 1;
@@ -233,12 +348,14 @@ export default class FruitMergeState extends BaseState {
     this._destroy(b, 0);
     const nb = this.world.add(new Body(x, y, cfg.radius, newLevel, physicsDefaults));
     nb.mergeLock = 0.12;
-    this.score += cfg.score;
+    nb.owner = owner;
+    this._award(cfg.score, owner);
     g.audio.play('boom');
-    this.effects.push({ x, y, r: cfg.radius, t: 0, dur: 0.35, color: cfg.color });
+    this._burst({ x, y, r: cfg.radius, t: 0, dur: 0.35, color: cfg.color });
 
     // 创新点：合成行为计数，阈值 = base + (等级-1)*step；
     //   每次触发抽卡 → 等级 +1 → 下一次阈值同步上抬。
+    //   联机时计的是**全队**的合成次数，抽卡也是全队一起抽。
     this.mergeCount++;
     const need = getCardTriggerCount('fruitMerge', g.playerLevel);
     if (this.mergeCount >= need) {
@@ -246,13 +363,13 @@ export default class FruitMergeState extends BaseState {
       g.playerLevel++;
       this.levelUpFlash = 0.9;
       this.cardSystem.trigger();
-      showToast(`Lv.${g.playerLevel}！`);
+      this._toast(`Lv.${g.playerLevel}！`);
     }
   }
 
-  _destroy(body, scoreGain) {
+  _destroy(body, scoreGain, seat) {
     this.world.remove(body);
-    if (scoreGain) this.score += scoreGain;
+    if (scoreGain) this._award(scoreGain, seat == null ? body.owner : seat);
   }
 
   // ---------------- 卡牌 ----------------
@@ -294,7 +411,7 @@ export default class FruitMergeState extends BaseState {
     const bodies = this.world.bodies.slice();
     if (bodies.length) {
       for (const v of pickHalfExcludingMax(bodies)) {
-        this.effects.push({ x: v.x, y: v.y, r: v.r, t: 0, dur: 0.3, color: '#ffffff' });
+        this._burst({ x: v.x, y: v.y, r: v.r, t: 0, dur: 0.3, color: '#ffffff' });
         this.world.remove(v);
       }
     }
@@ -311,7 +428,7 @@ export default class FruitMergeState extends BaseState {
       this.spawnNew();
     }
     this.game.audio.startBgm('merge');
-    showToast('复活成功！已消除一半水果');
+    this._toast('复活成功！已消除一半水果');
   }
 
   // ---------------- 更新 ----------------
@@ -320,8 +437,20 @@ export default class FruitMergeState extends BaseState {
     // 进度条显示值缓动（放在暂停分支之前：选卡时也能播完动画）
     this.scoreBarShown += (this.score - this.scoreBarShown) * Math.min(1, dt * 6);
     if (this.levelUpFlash > 0) this.levelUpFlash = Math.max(0, this.levelUpFlash - dt);
+    // 选卡投票的倒计时必须在暂停期间照常推进，否则 5 秒到点没人收口
+    this.cardSystem.tick(dt);
 
-    if (this.cardSystem.active) return; // 选卡时暂停物理
+    // guest：不跑物理，只做「插值渲染 + 本地投射口 + 上报输入」
+    if (this.sync.isGuest) {
+      this._guestUpdate(dt);
+      return;
+    }
+
+    if (this.cardSystem.active) {
+      // 暂停期间照常发快照，保证 guest 那边的世界与 HUD 不会漂
+      this.sync.hostTick(dt);
+      return;
+    }
 
     // 合成特效动画
     for (const e of this.effects) e.t += dt;
@@ -343,6 +472,9 @@ export default class FruitMergeState extends BaseState {
       this.spawnDelay -= dt;
       if (this.spawnDelay <= 0) this.spawnNew();
     }
+
+    // 其他玩家的投射口（冷却推进 + 落实他们的投放请求）
+    this.sync.hostUpdateLaunchers(dt);
 
     // 选卡队列：由卡牌系统内部决定何时弹出下一张
     this.cardSystem.update();
@@ -373,19 +505,56 @@ export default class FruitMergeState extends BaseState {
 
     // ---- 阶段晋级：分数达标 → 横幅倒计时 → 切换第二阶段 ----
     // （倒计时期间照常游玩；期间死亡则按普通失败处理，不再晋级）
-    if (!this.promoted && !this.dead && this.score >= stageScoreGoal) {
+    if (!this.promoted && !this.dead && this.score >= this.goal) {
       this.promoted = true;
       this.promoteTimer = PROMOTE_DELAY;
       this.game.audio.play('boom');
-      showToast('成功晋级下一阶段！');
+      this._toast('成功晋级下一阶段！');
     }
     if (this.promoted && !this.dead && this.promoteTimer > 0) {
       this.promoteTimer -= dt;
       if (this.promoteTimer <= 0) {
         this.promoteTimer = 0;
         this._advanceStage();
+        return;
       }
     }
+
+    this.sync.hostTick(dt);
+  }
+
+  /**
+   * guest 的每帧：世界完全由 host 下发，这里只做三件事 ——
+   *   1. 把插值后的刚体写回 world（渲染代码照旧读 world.bodies）；
+   *   2. 本地投射口跟手（不等 RTT，手感与单机一致）；
+   *   3. 把投射口横坐标上报给 host。
+   */
+  _guestUpdate(dt) {
+    for (const e of this.effects) e.t += dt;
+    this.effects = this.effects.filter((e) => e.t < e.dur);
+    this.sync.guestSync();
+    this._guestLauncher(dt);
+  }
+
+  _guestLauncher(dt) {
+    const W = this.game.screenW;
+    const mine = this.sync.mine;
+    this.nextLevel = mine.next | 0;
+    if (!mine.ready) {
+      this.current = null;
+    } else {
+      if (!this.current || this.current.level !== mine.level) {
+        const r = levels[mine.level].radius;
+        this.current = new Body(
+          clamp(this.touchX ?? W / 2, r, W - r), this.dropY, r, mine.level, physicsDefaults
+        );
+      }
+      const r = this.current.r;
+      const target = clamp(this.touchX ?? this.current.x, r, W - r);
+      this.current.x += (target - this.current.x) * Math.min(1, dt * 18);
+      this.current.y = this.dropY;
+    }
+    this.sync.guestSendInput(dt, this.current ? this.current.x : (this.touchX ?? W / 2), false);
   }
 
   /** 晋级收尾：走线性关卡流程（有下一关切换过去，否则按通关进结算） */
@@ -396,11 +565,16 @@ export default class FruitMergeState extends BaseState {
       g.saveBest();
     }
     const next = g.createNextStageState(this.stageId, this.score);
-    if (next) g.states.switchTo(next);
-    else this._gotoResult({ win: true });
+    if (next) {
+      // 各座位的累计分要带进下一阶段（下一阶段 onEnter 会取走）
+      g.carrySeatScores = this.seatScores.slice();
+      g.states.switchTo(next);
+    } else {
+      this._gotoResult({ win: true });
+    }
   }
 
-  /** 死亡/通关 → 压入结算层（记录最佳分数） */
+  /** 死亡/通关 → 压入结算层（记录最佳分数；host 同时把结果广播给全队） */
   _gotoResult(opts) {
     const g = this.game;
     if (this.score > g.bestScore) {
@@ -408,7 +582,19 @@ export default class FruitMergeState extends BaseState {
       g.saveBest();
     }
     g.audio.stopBgm();
-    g.states.push(g.createResultState(this, opts));
+    const rows = this.sync.scoreRows(this.seatScores);
+    if (this.sync.isHost) this.sync.announceResult(opts, rows);
+    g.states.push(g.createResultState(this, { ...opts, rows }));
+  }
+
+  /** guest 收到 host 下发的结算结果 */
+  onNetResult(data) {
+    const g = this.game;
+    this.dead = !data.w;
+    g.audio.stopBgm();
+    // 本局战绩只有 host 记过账，用它下发的表覆盖本地
+    g.runStats.decode(data.rs);
+    g.states.push(g.createResultState(this, { win: !!data.w, rows: data.rows || [] }));
   }
 
   // ---------------- 渲染 ----------------
@@ -437,6 +623,9 @@ export default class FruitMergeState extends BaseState {
     if (this.current) {
       drawDropGuide(ctx, this.current.x, this.current.y, this.current.r, this.floorY, 'rgba(42,24,16,0.35)');
       drawBall(ctx, this.current.x, this.current.y, this.current.r, this.current.level);
+      if (this.sync.online) {
+        drawSelfLauncherRing(ctx, this.current.x, this.current.y, this.current.r, this.mySeat);
+      }
     }
 
     for (const e of this.effects) drawPixelBurst(ctx, e);
@@ -444,7 +633,7 @@ export default class FruitMergeState extends BaseState {
     this._renderPlayerLevelBadge(ctx);
 
     {
-      const goal = stageScoreGoal;
+      const goal = this.goal;
       const cur = Math.min(this.scoreBarShown ?? this.score, goal);
       drawTopBar(
         ctx, g, W,
@@ -464,6 +653,7 @@ export default class FruitMergeState extends BaseState {
     }
 
     drawNextChip(ctx, W, this.nextLevel);
+    this._renderNetHud(ctx, W);
 
     if (this.promoted) {
       const secs = Math.ceil(this.promoteTimer);
@@ -479,8 +669,27 @@ export default class FruitMergeState extends BaseState {
     g.payModal.render(ctx);
   }
 
+  /**
+   * 联机 HUD：其他玩家的投射口 + 队伍计分板（单机什么都不画）。
+   * 必须在分数圈 / 下一个 / 抽卡进度之后画 —— 那几块 HUD 是不透明的，
+   * 先画投射口会被它们盖掉（投放线 dropY 正好穿过它们）。
+   */
+  _renderNetHud(ctx, W) {
+    if (!this.sync.online) return;
+    // 位置来自快照插值，所以远端投射口的移动是平滑的
+    for (const L of this.sync.remoteViews()) {
+      drawRemoteLauncher(ctx, L, this.dropY, this.floorY, this.sync.nameOf(L.seat), W);
+    }
+    drawTeamPanel(
+      ctx, W,
+      this.sync.scoreRows(this.seatScores),
+      this.sync.statusText(),
+      this.sync.warning
+    );
+  }
+
   _scoreBarFillWidth(bw) {
-    const goal = stageScoreGoal;
+    const goal = this.goal;
     const cur = Math.min(this.scoreBarShown ?? this.score, goal);
     if (cur <= 0) return 0;
     return Math.min(bw, Math.max(6, bw * (cur / goal)));

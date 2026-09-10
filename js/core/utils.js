@@ -52,6 +52,7 @@ export function weightedLevelIndex(poolSize) {
 
 const KEY_BEST = 'suika_best_score';
 const KEY_SOUND = 'suika_sound_on';
+const KEY_NAME = 'fvz_player_name';
 
 export const storage = {
   getBest() {
@@ -66,6 +67,13 @@ export const storage = {
   },
   setSoundOn(v) {
     wx.setStorageSync(KEY_SOUND, v);
+  },
+  /** 玩家昵称：排行榜主键 + 联机名牌 */
+  getName() {
+    return wx.getStorageSync(KEY_NAME) || '';
+  },
+  setName(v) {
+    wx.setStorageSync(KEY_NAME, v || '');
   }
 };
 
