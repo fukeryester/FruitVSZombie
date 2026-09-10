@@ -1,0 +1,15 @@
+{
+  "name": "fruitvszombie-devtools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Development tooling for the FruitVSZombie WeChat mini-game (lint + browser preview harness). Not part of the shipped mini-game package.",
+  "scripts": {
+    "lint": "eslint \"js/**/*.js\" game.js",
+    "serve": "http-server . -p 8080 -c-1 -s",
+    "dev": "http-server . -p 8080 -c-1 -s"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.1",
+    "http-server": "^14.1.1"
+  }
+}
