@@ -300,6 +300,66 @@ console.log('\n== 8. 上报异常不影响游戏 ==');
   eq('返回 null', res, null);
 }
 
+console.log('\n== 9. 撞上限流会自动补发一次 ==');
+{
+  // 平台限同一玩家 2 秒一次。一局打完立刻重开、在水果关几秒内被顶出去就会撞上，
+  // 不补发的话这一局的数据就悄悄丢了。
+  const f = fakeSdk(true);
+  let calls = 0;
+  const waited = [];
+  const realTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms) => { waited.push(ms); return realTimeout(fn, 0); };
+  f.gh.store = async () => {
+    calls++;
+    if (calls === 1) {
+      const e = new Error('HTTP 429 提交过于频繁，请 1.5 秒后重试');
+      e.status = 429;
+      throw e;
+    }
+    return { ok: true, stats: {}, unlocked: [], leaderboards: {} };
+  };
+  __setStatsFactory(f.factory);
+  const client = new ProgressClient();
+  await client.init();
+  const run = new RunStats();
+  run.add(0, 'kills', 7);
+  const res = await client.reportRun(run.forSeat(0), { score: 100, win: false });
+  globalThis.setTimeout = realTimeout;
+
+  eq('一共发了两次', calls, 2);
+  ok('补发成功后拿到了正常结果', !!res && res.ok === true, JSON.stringify(res));
+  eq('等待时长按服务端说的 1.5 秒来（多留一点余量）', waited[0], 1650);
+
+  // 不是限流的错误不该重试 —— 那只是白白多打一发
+  const f2 = fakeSdk(true);
+  let n2 = 0;
+  f2.gh.store = async () => { n2++; throw new Error('HTTP 500 服务器炸了'); };
+  __setStatsFactory(f2.factory);
+  const c2 = new ProgressClient();
+  await c2.init();
+  const r2 = await c2.reportRun(new RunStats().forSeat(0), { score: 1, win: false });
+  eq('非限流错误只发一次', n2, 1);
+  eq('并且照样返回 null，不影响游戏', r2, null);
+
+  // 连着两次都被限流就放弃，别死循环刷接口
+  const f3 = fakeSdk(true);
+  let n3 = 0;
+  globalThis.setTimeout = (fn) => realTimeout(fn, 0);
+  f3.gh.store = async () => {
+    n3++;
+    const e = new Error('提交过于频繁，请 1.9 秒后重试');
+    e.status = 429;
+    throw e;
+  };
+  __setStatsFactory(f3.factory);
+  const c3 = new ProgressClient();
+  await c3.init();
+  const r3 = await c3.reportRun(new RunStats().forSeat(0), { score: 1, win: false });
+  globalThis.setTimeout = realTimeout;
+  eq('最多补发一次就收手', n3, 2);
+  eq('放弃后返回 null', r3, null);
+}
+
 __setStatsFactory(null);
 console.log('\n----------------------------------------------------');
 console.log(`通过 ${pass} 项，失败 ${fails.length} 项`);

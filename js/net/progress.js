@@ -284,7 +284,7 @@ export class ProgressClient {
       if (run.wave > 0) gh.submit('deep_run', run.wave | 0);
       gh.submit('survivor', run.seconds | 0);
 
-      const res = await gh.store();
+      const res = await this._store(gh);
       this._pullCache();
       this.refreshBoards();
       this._pullExtras();
@@ -294,6 +294,34 @@ export class ProgressClient {
       return null;
     }
   }
+
+  /**
+   * 出网这一下。平台对同一个玩家同一款游戏限 2 秒一次，而一局打完立刻重开、
+   * 在水果关几秒内被顶出去是完全可能的 —— 撞上限流就等于这一局白打，而且
+   * 玩家那边一点提示都没有。服务端会在报错里说清楚还要等多久，那就等完再补一发。
+   * 只补一次：真连着被限流说明不是时序问题，硬刷没意义。
+   */
+  async _store(gh) {
+    try {
+      return await gh.store();
+    } catch (e) {
+      const wait = rateLimitWait(e);
+      if (wait === null) throw e;
+      console.warn(`[progress] 被限流，${wait} 毫秒后重试一次`);
+      await new Promise((r) => setTimeout(r, wait));
+      return gh.store();   // 待提交的数据还在 SDK 内存里，没被清掉
+    }
+  }
+}
+
+/** 认限流错误并算出该等多久；不是限流就返回 null。等不到确切秒数就按上限 2 秒兜底。 */
+function rateLimitWait(e) {
+  const status = e && (e.status || (e.response && e.response.status));
+  const text = String((e && (e.message || e.error)) || '');
+  if (status !== 429 && !/429|频繁|rate limit/i.test(text)) return null;
+  const m = text.match(/([\d.]+)\s*秒/) || text.match(/retry[^\d]*([\d.]+)/i);
+  const sec = m ? parseFloat(m[1]) : NaN;
+  return Math.min(2500, Math.max(250, Number.isFinite(sec) ? sec * 1000 + 150 : 2200));
 }
 
 /** 全局单例：main.js 构造时 init 一次，各处直接引用 */
